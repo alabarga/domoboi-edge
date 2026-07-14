@@ -1,0 +1,50 @@
+# config.yaml - Configuration for Domoboi NILM Edge client
+
+# Device Registration
+# If omitted or left empty, this will default to the machine's hostname (via socket.gethostname())
+# device_id: "domoboi-01"
+
+# Electrical Mains Configuration
+mains:
+  nominal_voltage: 230    # nominal AC voltage (V)
+  line_frequency: 50      # mains frequency in Hz (50 or 60)
+  phases: 1               # number of monitored phases (1, 2, or 3)
+
+# SPI Interface Configuration (for ATM90E36 energy chip)
+spi:
+  bus: 0                  # SPI Bus (/dev/spidevX.Y)
+  device: 0               # SPI Device / CS pin (0 = CE0, 1 = CE1)
+  speed_hz: 200000        # Clock speed in Hz
+  mode: 0                 # SPI Mode (ATM90E36 supports 0 or 3. Default: 0)
+
+# I2C PCA9671 GPIO Expander Configuration
+# DitroniX IPEM PiHat uses I2C PCA9671 to drive /CS if boards are stacked
+i2c:
+  enabled: true          # Set to true to control SPI /CS over I2C PCA9671
+  bus: 1                  # I2C Bus (/dev/i2c-1)
+  pca9671_addr: 0x20      # Address of the expander chip (default 0x20)
+  board_cs_bit: 9         # Output port pin used as /CS for the ATM90E36 (typically 9)
+
+# Calibration Coefficients (Adjust these during calibration)
+calibration:
+  ugain: 20200            # Voltage gain
+  igain_a: 33500          # Current gain for Channel A (CT1)
+  igain_b: 0              # Current gain for Channel B (CT2) - set to 0 if unused
+  igain_c: 0              # Current gain for Channel C (CT3) - set to 0 if unused
+
+# NILM Logic Parameters
+nilm:
+  sampling_interval_sec: 0.1      # Poll ATM90E36 every 100ms (10 Hz sampling)
+  transient_threshold_watts: 40.0 # Min delta-P (Watts) to declare a transient
+  match_window_seconds: 3600      # Max time (1 hour) to match ON and OFF transients
+
+# Django Ingestion API Configuration
+api:
+  base_url: "http://localhost:8000"  # Target Django backend URL
+  token: "default-api-token-value-here"
+  timeout_sec: 5
+
+# Local Offline Storage Buffer
+buffer:
+  db_path: "data/offline_events.db"
+  sync_interval_sec: 30

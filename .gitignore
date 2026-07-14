@@ -1,0 +1,34 @@
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Configuration (contains private API token)
+config.yaml
+
+# Local Data Buffers and Logs
+data/
+*.log
+test_data/
+
+# OS-specific files
+.DS_Store
+.Thumbs.db
+
+# CMake / C Build artifacts
+testctread/build/
+testctread/testctread
+testctread/CMakeCache.txt
+testctread/CMakeFiles/
+testctread/Makefile
+testctread/cmake_install.cmake
+testctread/device/*.o
+testctread/driver/*.o
+testctread/main.o
