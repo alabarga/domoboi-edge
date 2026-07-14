@@ -88,7 +88,6 @@ class ATM90E36:
         
         if self.i2c_enabled:
             import smbus2
-            self._spi.no_cs = True  # We manual toggle CS
             self._i2c = smbus2.SMBus(self.i2c_bus_num)
             self._pca_write(self._pca_state)  # set all high initially
             
