@@ -162,7 +162,7 @@ async def run_rich_dashboard(config):
         while True:
             try:
                 # Header Panel
-                header_text = Text(f"DOMOBOI NILM CLIENT - {config.get('device_id', 'unknown')}", style="bold cyan")
+                header_text = Text(f"DOMOBOI NILM CLIENT - {config.get('device_id', 'unknown')}", style="bold cyan", justify="center")
                 
                 # Telemetry Table
                 table = Table(title="Live Telemetry [Phase A]", title_style="bold green")
@@ -216,7 +216,7 @@ async def run_rich_dashboard(config):
                     )
                     
                 main_group = Group(
-                    Panel(header_text, border_style="blue", align="center"),
+                    Panel(header_text, border_style="blue"),
                     table,
                     power_panel,
                     events_table,
