@@ -15,7 +15,7 @@ spi:
   bus: 0                  # SPI Bus (/dev/spidevX.Y)
   device: 0               # SPI Device / CS pin (0 = CE0, 1 = CE1)
   speed_hz: 200000        # Clock speed in Hz
-  mode: 0                 # SPI Mode (ATM90E36 supports 0 or 3. Default: 0)
+  mode: 3                 # SPI Mode (ATM90E36 supports 0 or 3. Default: 0, active: 3)
 
 # I2C PCA9671 GPIO Expander Configuration
 # DitroniX IPEM PiHat uses I2C PCA9671 to drive /CS if boards are stacked
@@ -24,6 +24,7 @@ i2c:
   bus: 1                  # I2C Bus (/dev/i2c-1)
   pca9671_addr: 0x21      # Address of the expander chip (default 0x20, active: 0x21)
   board_cs_bit: 9         # Output port pin used as /CS for the ATM90E36 (typically 9)
+  pca_idle_state: 0x03FF  # CS high + DMA control default state (from reference)
 
 # Calibration Coefficients (Adjust these during calibration)
 calibration:

@@ -84,12 +84,14 @@ class ATM90E36:
         
         # Init I2C
         self._i2c = None
-        self._pca_state = 0xFFFF  # Start with all expander outputs HIGH
+        # Default idle state: P0=0xFF, P1=0x03 (0x03FF) -> CS high + DMA ctrl
+        self.pca_idle_state = i2c_cfg.get("pca_idle_state", 0x03FF)
+        self._pca_state = self.pca_idle_state
         
         if self.i2c_enabled:
             import smbus2
             self._i2c = smbus2.SMBus(self.i2c_bus_num)
-            self._pca_write(self._pca_state)  # set all high initially
+            self._pca_write(self._pca_state)  # set idle state
             
         # Lock to protect SPI/I2C transactions from overlapping threads
         self._lock = threading.Lock()
