@@ -22,7 +22,7 @@ spi:
 i2c:
   enabled: true          # Set to true to control SPI /CS over I2C PCA9671
   bus: 1                  # I2C Bus (/dev/i2c-1)
-  pca9671_addr: 0x20      # Address of the expander chip (default 0x20)
+  pca9671_addr: 0x21      # Address of the expander chip (default 0x20, active: 0x21)
   board_cs_bit: 9         # Output port pin used as /CS for the ATM90E36 (typically 9)
 
 # Calibration Coefficients (Adjust these during calibration)

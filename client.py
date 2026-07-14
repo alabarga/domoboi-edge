@@ -215,7 +215,7 @@ def main():
         log.error(f"Failed to load ATM90E36 driver: {e}")
         sys.exit(1)
 
-    if args.smoke-test or args.smoke_test:
+    if args.smoke_test:
         run_smoke_test(chip)
         chip.close()
         sys.exit(0)

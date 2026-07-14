@@ -36,6 +36,21 @@ else
   echo "Warning: Boot configuration file not found. Please enable SPI/I2C manually."
 fi
 
+# 1b. Ensure i2c-dev kernel module is loaded on boot
+if [ -f /etc/modules ]; then
+  if ! grep -q "^i2c-dev" /etc/modules; then
+    echo "i2c-dev" >> /etc/modules
+    echo "Configured i2c-dev to load on boot in /etc/modules"
+  fi
+fi
+
+# 1c. Add user to hardware groups to run code without sudo
+if [ -n "$SUDO_USER" ]; then
+  echo "Adding user $SUDO_USER to spi, i2c, and gpio groups..."
+  usermod -aG spi,i2c,gpio "$SUDO_USER" || true
+fi
+
+
 # 2. Install System Packages
 echo "--> Updating packages and installing dependencies..."
 apt-get update
