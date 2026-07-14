@@ -79,7 +79,7 @@ class LTESender:
                     log.warning(f"Failed to send. Server returned HTTP status {resp.status}: {body}")
                     return False
         except Exception as e:
-            log.debug(f"Network POST request failed: {e}")
+            log.warning(f"Network POST request failed: {e}")
             return False
 
     async def run(self):

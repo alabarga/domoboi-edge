@@ -142,11 +142,16 @@ python3 -m venv "$VENV_PATH"
 "$VENV_PATH/bin/pip" install --upgrade pip
 "$VENV_PATH/bin/pip" install spidev smbus2 pyyaml aiohttp
 
-# Create dummy config.yaml if it doesn't exist
-if [ ! -f "$SCRIPT_DIR/config.yaml" ] && [ -f "$SCRIPT_DIR/config.example.yaml" ]; then
-  echo "Copying config.example.yaml to config.yaml..."
-  cp "$SCRIPT_DIR/config.example.yaml" "$SCRIPT_DIR/config.yaml"
+# Create local data directory and ensure correct user ownership
+mkdir -p "$SCRIPT_DIR/data"
+if [ -n "$SUDO_USER" ]; then
+  chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/data" 2>/dev/null || true
+  if [ -f "$SCRIPT_DIR/config.yaml" ]; then
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/config.yaml" 2>/dev/null || true
+  fi
 fi
+
+
 
 # 6. Install Python Edge Client as a Systemd Service
 echo "--> Installing Systemd Service..."
