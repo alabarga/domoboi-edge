@@ -32,6 +32,11 @@ if [ -f "$CONFIG_FILE" ]; then
     echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
     echo "Enabled I2C in $CONFIG_FILE"
   fi
+  # Enable USB Max Current for Raspberry Pi 5
+  if ! grep -q "^usb_max_current_enable=1" "$CONFIG_FILE"; then
+    echo "usb_max_current_enable=1" >> "$CONFIG_FILE"
+    echo "Enabled high USB current limit (usb_max_current_enable=1) in $CONFIG_FILE"
+  fi
 else
   echo "Warning: Boot configuration file not found. Please enable SPI/I2C manually."
 fi
@@ -50,6 +55,14 @@ if [ -n "$SUDO_USER" ]; then
   usermod -aG spi,i2c,gpio "$SUDO_USER" || true
 fi
 
+# 1d. Configure Spanish locale to avoid SSH warnings
+if [ -f /etc/locale.gen ]; then
+  if ! grep -q "^es_ES.UTF-8 UTF-8" /etc/locale.gen && grep -q "# es_ES.UTF-8 UTF-8" /etc/locale.gen; then
+    sed -i 's/# es_ES.UTF-8 UTF-8/es_ES.UTF-8 UTF-8/' /etc/locale.gen
+    echo "Generating es_ES.UTF-8 locale..."
+    locale-gen || true
+  fi
+fi
 
 # 2. Install System Packages
 echo "--> Updating packages and installing dependencies..."
@@ -78,9 +91,19 @@ if lsusb | grep -qi "quectel"; then
   # Typically the command port is /dev/ttyUSB2
   if [ -e /dev/ttyUSB2 ]; then
     echo "Sending configuration commands to modem (/dev/ttyUSB2)..."
-    # AT+QCFG="usbnet",1 sets to ECM mode. AT+CFUN=1,1 reboots the modem.
-    # Using stty to set baud rate and redirection
     stty -F /dev/ttyUSB2 115200 || true
+    
+    # Prompt for SIM PIN if standard input is a terminal (interactive)
+    if [ -t 0 ]; then
+      read -p "Enter your SIM card PIN (or press Enter to skip if no PIN): " -r SIM_PIN
+      if [ -n "$SIM_PIN" ]; then
+        echo "Disabling SIM PIN lock..."
+        echo -e "AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r" > /dev/ttyUSB2
+        sleep 1
+      fi
+    fi
+    
+    # AT+QCFG="usbnet",1 sets to ECM mode. AT+CFUN=1,1 reboots the modem.
     echo -e 'AT+QCFG="usbnet",1\r' > /dev/ttyUSB2
     sleep 1
     echo -e 'AT+CFUN=1,1\r' > /dev/ttyUSB2

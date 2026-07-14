@@ -94,7 +94,8 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
 
 
 def time_ms():
-    return int(asyncio.get_event_loop().time() * 1000) if hasattr(asyncio, 'get_event_loop') else int(datetime.now().timestamp() * 1000)
+    import time
+    return int(time.time() * 1000)
 
 
 async def main_async(config, chip):
