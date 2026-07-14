@@ -151,12 +151,23 @@ class ATM90E36:
                 self._cs_deassert()
 
     def check_sum(self, start, end):
-        """Compute the sum-of-bytes checksum in the register range."""
-        checksum = 0
+        """Compute the ATM90E36 checksum algorithm:
+        Low Byte: sum of all bytes in register range (modulo 256)
+        High Byte: XOR of all bytes in register range
+        """
+        tmpl = 0
+        tmph = 0
         for r in range(start, end + 1):
             v = self.read_reg(r)
-            checksum += (v & 0xFF) + ((v >> 8) & 0xFF)
-        return checksum & 0xFFFF
+            log.info(f"Register {hex(r)} read back: {hex(v)}")
+            low_byte = v & 0xFF
+            high_byte = (v >> 8) & 0xFF
+            tmpl += low_byte + high_byte
+            tmph ^= low_byte ^ high_byte
+        
+        cs_low = tmpl % 256
+        cs_high = tmph % 256
+        return cs_low + (cs_high << 8)
 
     def initialize(self):
         """Perform ATM90E36 software reset and config sequence."""
