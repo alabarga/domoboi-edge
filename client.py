@@ -188,7 +188,7 @@ async def run_rich_dashboard(config):
                 # Real-Time Load Bar
                 max_w = 3000.0
                 bar_color = "red" if p > 2000.0 else ("yellow" if p > 500.0 else "green")
-                power_bar = Bar(total=max_w, completed=max(0.0, min(max_w, p)), color=bar_color)
+                power_bar = Bar(max_w, 0.0, max(0.0, min(max_w, p)), color=bar_color)
                 
                 power_panel = Panel(
                     Group(
