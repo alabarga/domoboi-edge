@@ -50,10 +50,21 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
             # Poll phase A measurements
             v = chip.get_voltage("A")
             i = chip.get_current("A")
-            p = chip.get_active_power("A")
-            q = chip.get_reactive_power("A")
-            pf = chip.get_power_factor("A")
-            freq = chip.get_frequency()
+            
+            # If no AC-AC adapter is connected (voltage reads 0 or near 0),
+            # estimate the active power using nominal voltage from config
+            if v < 5.0:
+                nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)
+                p = i * nominal_v
+                q = 0.0
+                pf = 1.0
+                freq = float(config.get("mains", {}).get("line_frequency", 50.0))
+            else:
+                p = chip.get_active_power("A")
+                q = chip.get_reactive_power("A")
+                pf = chip.get_power_factor("A")
+                freq = chip.get_frequency()
+                
             temp = chip.get_temperature()
             
             # Pack measurement dictionary
@@ -139,7 +150,7 @@ async def main_async(config, chip):
     log.info("System cleanup complete. Goodbye.")
 
 
-def run_smoke_test(chip):
+def run_smoke_test(chip, config):
     """Smoke test helper: initialize chip and print readings."""
     print("=========================================")
     print(" Running ATM90E36 Smoke Test...         ")
@@ -156,14 +167,25 @@ def run_smoke_test(chip):
         try:
             v = chip.get_voltage("A")
             i = chip.get_current("A")
-            p = chip.get_active_power("A")
-            q = chip.get_reactive_power("A")
-            pf = chip.get_power_factor("A")
-            freq = chip.get_frequency()
+            
+            if v < 5.0:
+                nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)
+                p = i * nominal_v
+                q = 0.0
+                pf = 1.0
+                freq = float(config.get("mains", {}).get("line_frequency", 50.0))
+                is_estimated = " (Estimated)"
+            else:
+                p = chip.get_active_power("A")
+                q = chip.get_reactive_power("A")
+                pf = chip.get_power_factor("A")
+                freq = chip.get_frequency()
+                is_estimated = ""
+                
             temp = chip.get_temperature()
             
             print(
-                f"[{idx}/10] V: {v:.2f}V | I: {i:.3f}A | P: {p:.1f}W | "
+                f"[{idx}/10] V: {v:.2f}V | I: {i:.3f}A | P: {p:.1f}W{is_estimated} | "
                 f"Q: {q:.1f}var | PF: {pf:.3f} | Freq: {freq:.2f}Hz | Temp: {temp:.1f}C"
             )
         except Exception as e:
@@ -216,7 +238,7 @@ def main():
         sys.exit(1)
 
     if args.smoke_test:
-        run_smoke_test(chip)
+        run_smoke_test(chip, config)
         chip.close()
         sys.exit(0)
 
