@@ -140,12 +140,12 @@ echo "--> Creating Python virtual environment..."
 VENV_PATH="$SCRIPT_DIR/.venv"
 python3 -m venv "$VENV_PATH"
 "$VENV_PATH/bin/pip" install --upgrade pip
-"$VENV_PATH/bin/pip" install spidev smbus2 pyyaml aiohttp
+"$VENV_PATH/bin/pip" install spidev smbus2 pyyaml aiohttp rich
 
 # Create local data directory and ensure correct user ownership
 mkdir -p "$SCRIPT_DIR/data"
 if [ -n "$SUDO_USER" ]; then
-  chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/data" 2>/dev/null || true
+  chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/data" "$VENV_PATH" 2>/dev/null || true
   if [ -f "$SCRIPT_DIR/config.yaml" ]; then
     chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/config.yaml" 2>/dev/null || true
   fi

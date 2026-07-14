@@ -2,7 +2,6 @@
 client.py - Main orchestrator for the Domoboi NILM Edge Client.
 Manages the hardware capture thread and starts the async NILM processing and LTE transmission pipelines.
 """
-
 import sys
 import yaml
 import argparse
@@ -16,15 +15,51 @@ from atm90e36 import ATM90E36
 from nilm_processor import NILMProcessor
 from sender import LTESender
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Try importing Rich components for console visualization
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.live import Live
+    from rich.bar import Bar
+    from rich.table import Table
+    from rich.console import Group
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+
+USE_DASHBOARD = HAS_RICH and sys.stdout.isatty()
+
+# Setup logging
+log_file_handler = logging.FileHandler("data/client.log")
+log_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
+log_stream_handler = logging.StreamHandler(sys.stdout)
+log_stream_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+if USE_DASHBOARD:
+    import os
+    os.makedirs("data", exist_ok=True)
+    root_logger.addHandler(log_file_handler)
+else:
+    root_logger.addHandler(log_stream_handler)
+
 log = logging.getLogger("client")
+
+# Global data stores for UI thread updates
+latest_meas = {
+    "voltage_a": 0.0,
+    "current_a": 0.0,
+    "active_power_a": 0.0,
+    "reactive_power_a": 0.0,
+    "power_factor_a": 0.0,
+    "frequency": 0.0,
+    "temperature": 0.0
+}
+latest_events = []
 
 
 def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
@@ -79,6 +114,18 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
                 "temperature": temp
             }
             
+            # Update global real-time display container
+            global latest_meas
+            latest_meas.update({
+                "voltage_a": v,
+                "current_a": i,
+                "active_power_a": p,
+                "reactive_power_a": q,
+                "power_factor_a": pf,
+                "frequency": freq,
+                "temperature": temp
+            })
+            
             # Safely schedule addition into asyncio queue
             loop.call_soon_threadsafe(raw_queue.put_nowait, meas)
             
@@ -98,6 +145,93 @@ def time_ms():
     return int(time.time() * 1000)
 
 
+async def run_rich_dashboard(config):
+    """Real-time terminal visualization using the Rich library."""
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.console import Group
+    from rich.bar import Bar
+    from rich.text import Text
+    from rich.console import Console
+    import os
+    
+    console = Console()
+    
+    with Live(console=console, refresh_per_second=1, screen=True) as live:
+        while True:
+            try:
+                # Header Panel
+                header_text = Text(f"DOMOBOI NILM CLIENT - {config.get('device_id', 'unknown')}", style="bold cyan")
+                
+                # Telemetry Table
+                table = Table(title="Live Telemetry [Phase A]", title_style="bold green")
+                table.add_column("Parameter", style="cyan")
+                table.add_column("Value", style="magenta")
+                table.add_column("Status/Source", style="yellow")
+                
+                v = latest_meas.get("voltage_a", 0.0)
+                i = latest_meas.get("current_a", 0.0)
+                p = latest_meas.get("active_power_a", 0.0)
+                freq = latest_meas.get("frequency", 0.0)
+                temp = latest_meas.get("temperature", 0.0)
+                
+                v_status = "Software Estimated" if v < 5.0 else "Hardware Reference"
+                v_disp = f"230.0 V (Estimated)" if v < 5.0 else f"{v:.2f} V"
+                
+                table.add_row("Voltage", v_disp, v_status)
+                table.add_row("Current", f"{i:.3f} A", "Active CT" if i > 0.005 else "Idle")
+                table.add_row("Active Power", f"{p:.1f} W", "Load ON" if p > 10.0 else "Idle")
+                table.add_row("Frequency", f"{freq:.2f} Hz", "Normal" if 49.0 <= freq <= 51.0 else "Unstable")
+                table.add_row("Chip Temp", f"{temp:.1f} °C", "Normal")
+                
+                # Real-Time Load Bar
+                max_w = 3000.0
+                bar_color = "red" if p > 2000.0 else ("yellow" if p > 500.0 else "green")
+                power_bar = Bar(size=max_w, begin=0, end=p, color=bar_color)
+                
+                power_panel = Panel(
+                    Group(
+                        Text(f"Estimated Load Wattage: {p:.1f} W / {max_w:.0f} W", style="bold white"),
+                        power_bar
+                    ),
+                    title="Real-Time Load Profile",
+                    border_style="cyan"
+                )
+                
+                # Latest Events Table
+                events_table = Table(title="Latest Detected NILM Events", title_style="bold yellow")
+                events_table.add_column("Timestamp", style="dim")
+                events_table.add_column("Appliance Type", style="bold magenta")
+                events_table.add_column("Duration", style="cyan")
+                events_table.add_column("Description", style="white")
+                
+                # Show last 5 events
+                for ev in latest_events[-5:]:
+                    events_table.add_row(
+                        ev.get("start_time", "")[:19],
+                        ev.get("type", "UNKNOWN"),
+                        f"{ev.get('duration_minutes', 0)} min",
+                        ev.get("description", "")
+                    )
+                    
+                main_group = Group(
+                    Panel(header_text, border_style="blue", align="center"),
+                    table,
+                    power_panel,
+                    events_table,
+                    Text("Press Ctrl+C to terminate client safely. Logs are written to data/client.log", style="dim italic")
+                )
+                
+                live.update(main_group)
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Error updating dashboard: {e}")
+                await asyncio.sleep(1.0)
+
+
 async def main_async(config, chip):
     # Queues
     raw_queue = asyncio.Queue()
@@ -105,7 +239,7 @@ async def main_async(config, chip):
     
     # Instantiate Pipeline Components
     processor = NILMProcessor(config, raw_queue, event_queue)
-    sender = LTESender(config, event_queue)
+    sender = LTESender(config, event_queue, latest_events)
     
     # Setup background capture thread
     stop_event = threading.Event()
@@ -121,6 +255,10 @@ async def main_async(config, chip):
     # Launch async tasks
     proc_task = asyncio.create_task(processor.run())
     send_task = asyncio.create_task(sender.run())
+    
+    # Start dashboard if interactive rich mode is enabled
+    if USE_DASHBOARD:
+        asyncio.create_task(run_rich_dashboard(config))
     
     # Handle OS Shutdown Signals
     def shutdown_handler():

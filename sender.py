@@ -15,9 +15,10 @@ log = logging.getLogger(__name__)
 
 
 class LTESender:
-    def __init__(self, config, event_queue):
+    def __init__(self, config, event_queue, latest_events=None):
         self.config = config
         self.event_queue = event_queue
+        self.latest_events = latest_events if latest_events is not None else []
         
         api_cfg = config.get("api", {})
         self.base_url = api_cfg.get("base_url", "http://localhost:8000")
@@ -99,6 +100,9 @@ class LTESender:
                         break
                     
                     log.info(f"Attempting to transmit event: {event['type']}")
+                    if self.latest_events is not None:
+                        self.latest_events.append(event)
+                        
                     success = await self.send_payload(session, url, event)
                     
                     if not success:
