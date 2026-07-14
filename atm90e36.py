@@ -107,8 +107,10 @@ class ATM90E36:
         """Write 16-bit word to PCA9671 expander."""
         if self._i2c is not None:
             try:
-                # Write P00-P07 and P10-P17 (2 bytes)
-                self._i2c.write_i2c_block_data(self.pca_addr, 0, [value & 0xFF, (value >> 8) & 0xFF])
+                from smbus2 import i2c_msg
+                # Write P00-P07 and P10-P17 (2 bytes) directly without a command register byte
+                msg = i2c_msg.write(self.pca_addr, [value & 0xFF, (value >> 8) & 0xFF])
+                self._i2c.i2c_rdwr(msg)
             except Exception as e:
                 log.error(f"I2C Write to PCA9671 failed: {e}")
 
