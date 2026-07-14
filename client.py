@@ -117,6 +117,7 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
             # Update global real-time display container
             global latest_meas
             latest_meas.update({
+                "timestamp": meas["timestamp"],
                 "voltage_a": v,
                 "current_a": i,
                 "active_power_a": p,
@@ -178,7 +179,11 @@ async def run_rich_dashboard(config):
                 
                 v_status = "Software Estimated" if v < 5.0 else "Hardware Reference"
                 v_disp = f"230.0 V (Estimated)" if v < 5.0 else f"{v:.2f} V"
+
+                t = latest_meas.get("timestamp")
+                t_disp = t.strftime("%H:%M:%S.%f")[:-3] if t else "N/A"
                 
+                table.add_row("Last Poll Time", t_disp, "10 Hz Polling")
                 table.add_row("Voltage", v_disp, v_status)
                 table.add_row("Current", f"{i:.3f} A", "Active CT" if i > 0.005 else "Idle")
                 table.add_row("Active Power", f"{p:.1f} W", "Load ON" if p > 10.0 else "Idle")
