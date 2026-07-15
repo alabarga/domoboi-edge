@@ -67,7 +67,7 @@ class LTESender:
 
 
     async def send_payload(self, session, url, payload):
-        """Perform POST request with token authorization."""
+        """Perform POST request with token authorization. Returns response JSON dict on success, None on failure."""
         headers = {
             "Authorization": f"Token {self.token}",
             "Content-Type": "application/json"
@@ -75,14 +75,17 @@ class LTESender:
         try:
             async with session.post(url, json=payload, headers=headers, timeout=self.timeout) as resp:
                 if resp.status in (200, 201):
-                    return True
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {"status": "success"}
                 else:
                     body = await resp.text()
                     log.warning(f"Failed to send. Server returned HTTP status {resp.status}: {body}")
-                    return False
+                    return None
         except Exception as e:
             log.warning(f"Network POST request failed: {e}")
-            return False
+            return None
 
     async def run(self):
         log.info("LTE Sender started.")
@@ -101,9 +104,9 @@ class LTESender:
                         break
                     
                     log.info(f"Attempting to transmit measurement segment with {len(meas['readings'])} samples...")
-                    success = await self.send_payload(session, url, meas)
+                    resp_data = await self.send_payload(session, url, meas)
                     
-                    if not success:
+                    if not resp_data:
                         # Failed to send: store it in offline buffer
                         self.buffer_measurement(meas)
                     else:
@@ -143,9 +146,9 @@ class LTESender:
                     for row_id, payload_str in rows:
                         meas = json.loads(payload_str)
                         # Attempt transmission
-                        success = await self.send_payload(session, url, meas)
+                        resp_data = await self.send_payload(session, url, meas)
                         
-                        if success:
+                        if resp_data:
                             # Remove from DB
                             conn = sqlite3.connect(self.db_path)
                             cursor = conn.cursor()

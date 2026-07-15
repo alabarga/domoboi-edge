@@ -128,8 +128,8 @@ class ATM90E36:
 
     def read_reg(self, reg):
         """Read 16-bit value from register, retrying if RMS registers return SPI noise (0xFFFF or 0xFFFE)."""
-        # RMS registers for voltage and current
-        rms_registers = [0xD1, 0xD2, 0xD3, 0xD9, 0xDA, 0xDB]
+        # RMS registers for voltage (0xD9-0xDB) and current (0xDD-0xDF) — all unsigned
+        rms_registers = [0xD1, 0xD2, 0xD3, 0xD9, 0xDA, 0xDB, 0xDD, 0xDE, 0xDF]
         import time
         
         for attempt in range(3):

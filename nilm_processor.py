@@ -1,7 +1,8 @@
 """
 nilm_processor.py - Real-time NILM transient-event detector.
 Consumes power readings, identifies step changes (transients), matches ON/OFF cycles,
-and generates appliance events.
+and captures the raw readings array. No appliance classification is done on the edge —
+that is handled by the Django server after ingestion.
 """
 
 import asyncio
@@ -9,33 +10,6 @@ import logging
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
-
-
-def classify_appliance(power):
-    """
-    Classify appliance type and event class based on active power level (Watts).
-    Matches choices in Django nilm.models.Event.APPLIANCE_TYPES.
-    """
-    p = abs(power)
-    if 40 <= p < 80:
-        return "LIGHTS", "NORMAL"
-    elif 80 <= p < 250:
-        return "FRIDGE", "NORMAL"
-    elif 250 <= p < 600:
-        return "TV", "NORMAL"
-    elif 600 <= p < 1300:
-        return "MICROWAVE", "NORMAL"
-    elif 1300 <= p < 1700:
-        return "IRON", "NORMAL"
-    elif 1700 <= p < 2300:
-        return "OVEN", "NORMAL"
-    elif 2300 <= p < 3200:
-        return "KETTLE", "NORMAL"
-    elif 3200 <= p < 5000:
-        # Washing machines under full heating cycle
-        return "WASHING MACHINE", "NORMAL"
-    else:
-        return "LIGHTS", "NORMAL"
 
 
 class NILMProcessor:
@@ -151,17 +125,15 @@ class NILMProcessor:
                 duration_sec = (end_time - start_time).total_seconds()
                 duration_min = int(duration_sec / 60)
                 
-                # Classify locally for UI display
-                appliance, class_name = classify_appliance(power_watts)
                 desc = (
-                    f"Funcionamiento detectado de {appliance} con potencia de {power_watts:.1f}W "
+                    f"Consumo detectado con potencia de {power_watts:.1f}W "
                     f"por {duration_min} minutos."
                 )
                 
                 # Add local display event for Rich UI terminal
                 local_event = {
                     "start_time": start_time.isoformat(),
-                    "type": appliance,
+                    "type": "CYCLE",
                     "duration_minutes": duration_min,
                     "description": desc,
                     "power": power_watts
@@ -173,7 +145,8 @@ class NILMProcessor:
                     "device_id": self.device_id,
                     "start_time": start_time.isoformat(),
                     "end_time": end_time.isoformat(),
-                    "readings": on_transient["readings"]
+                    "readings": on_transient["readings"],
+                    "power": power_watts
                 }
                 
                 log.info(f"Appliance active cycle finished: matched ON/OFF. Enqueueing {len(on_transient['readings'])} samples.")

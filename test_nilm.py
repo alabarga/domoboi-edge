@@ -12,20 +12,8 @@ from datetime import datetime, timezone, timedelta
 from aiohttp import web
 
 # Import our edge modules
-from nilm_processor import NILMProcessor, classify_appliance
+from nilm_processor import NILMProcessor
 from sender import LTESender
-
-
-class TestNILMClassification(unittest.TestCase):
-    def test_classification_ranges(self):
-        self.assertEqual(classify_appliance(60)[0], "LIGHTS")
-        self.assertEqual(classify_appliance(120)[0], "FRIDGE")
-        self.assertEqual(classify_appliance(400)[0], "TV")
-        self.assertEqual(classify_appliance(1000)[0], "MICROWAVE")
-        self.assertEqual(classify_appliance(1500)[0], "IRON")
-        self.assertEqual(classify_appliance(2000)[0], "OVEN")
-        self.assertEqual(classify_appliance(2500)[0], "KETTLE")
-        self.assertEqual(classify_appliance(3500)[0], "WASHING MACHINE")
 
 
 class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
@@ -96,7 +84,7 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
         
         # UI events list should have the local display event
         self.assertEqual(len(latest_events), 1)
-        self.assertEqual(latest_events[0]["type"], "KETTLE")
+        self.assertEqual(latest_events[0]["type"], "CYCLE")
         
         # Cleanup
         await raw_queue.put(None)
