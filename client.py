@@ -208,14 +208,23 @@ async def run_rich_dashboard(config):
                 events_table = Table(title="Latest Detected NILM Events", title_style="bold yellow")
                 events_table.add_column("Timestamp", style="dim")
                 events_table.add_column("Appliance Type", style="bold magenta")
+                events_table.add_column("Power Step", style="yellow")
                 events_table.add_column("Duration", style="cyan")
                 events_table.add_column("Description", style="white")
                 
                 # Show last 5 events
                 for ev in latest_events[-5:]:
+                    ev_p = ev.get("power", 0.0)
+                    # Scale: 1 block per 300W up to 3000W
+                    blocks = int(ev_p / 300.0)
+                    blocks = max(1, min(10, blocks)) if ev_p > 0.0 else 0
+                    bar_str = "█" * blocks + "░" * (10 - blocks)
+                    power_disp = f"[{bar_str}] {ev_p:.1f}W"
+                    
                     events_table.add_row(
-                        ev.get("start_time", "")[:19],
+                        ev.get("start_time", "")[:19].replace("T", " "),
                         ev.get("type", "UNKNOWN"),
+                        power_disp,
                         f"{ev.get('duration_minutes', 0)} min",
                         ev.get("description", "")
                     )
@@ -243,7 +252,7 @@ async def main_async(config, chip):
     event_queue = asyncio.Queue()
     
     # Instantiate Pipeline Components
-    processor = NILMProcessor(config, raw_queue, event_queue)
+    processor = NILMProcessor(config, raw_queue, event_queue, latest_events)
     sender = LTESender(config, event_queue, latest_events)
     
     # Setup background capture thread

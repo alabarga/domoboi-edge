@@ -39,10 +39,11 @@ def classify_appliance(power):
 
 
 class NILMProcessor:
-    def __init__(self, config, raw_queue, event_queue):
+    def __init__(self, config, raw_queue, event_queue, latest_events=None):
         self.config = config
         self.raw_queue = raw_queue
         self.event_queue = event_queue
+        self.latest_events = latest_events if latest_events is not None else []
         
         nilm_cfg = config.get("nilm", {})
         self.threshold = nilm_cfg.get("transient_threshold_watts", 40.0)
@@ -54,7 +55,7 @@ class NILMProcessor:
         self.history_size = 10
         self.power_history = []
         
-        # List of unmatched ON transients: [{"timestamp": dt, "power": float}]
+        # List of unmatched ON transients: [{"timestamp": dt, "power": float, "readings": list}]
         self.unmatched_on = []
 
     async def run(self):
@@ -68,7 +69,13 @@ class NILMProcessor:
                     break
                 
                 timestamp = meas.get("timestamp")
-                power = meas.get("active_power_a", 0.0)  # Main single-phase active power
+                power = meas.get("active_power_a", 0.0)  # Main active power
+                
+                # Append raw reading to all active unmatched ON transient segments
+                for on_tr in self.unmatched_on:
+                    # Cap array size to prevent memory bloat during infinite runs (max 30 mins)
+                    if len(on_tr["readings"]) < 18000:
+                        on_tr["readings"].append(power)
                 
                 # Maintain rolling window
                 self.power_history.append(power)
@@ -98,10 +105,11 @@ class NILMProcessor:
         log.info(f"Transient detected: Delta P = {dp:.1f}W at {dt.isoformat()}")
         
         if dp > 0:
-            # ON Transient: store it for matching
+            # ON Transient: store it for matching and start recording active readings
             self.unmatched_on.append({
                 "timestamp": dt,
-                "power": dp
+                "power": dp,
+                "readings": [dp]  # Initialize segment readings with the step size
             })
             log.debug(f"Stored ON transient. Total unmatched: {len(self.unmatched_on)}")
         else:
@@ -126,13 +134,13 @@ class NILMProcessor:
                 if power_diff < tolerance and power_diff < min_power_diff:
                     min_power_diff = power_diff
                     match_index = i
-
+ 
             # Clean up expired ON transients
             self.unmatched_on = [
                 on for on in self.unmatched_on
                 if (now - on["timestamp"]).total_seconds() <= self.match_window
             ]
-
+ 
             if match_index != -1 and match_index < len(self.unmatched_on):
                 # Found a match!
                 on_transient = self.unmatched_on.pop(match_index)
@@ -143,31 +151,32 @@ class NILMProcessor:
                 duration_sec = (end_time - start_time).total_seconds()
                 duration_min = int(duration_sec / 60)
                 
+                # Classify locally for UI display
                 appliance, class_name = classify_appliance(power_watts)
-                
-                # Check for anomalies / alerts (e.g. Kettle on for too long)
-                if appliance == "KETTLE" and duration_sec > 600:  # Kettle on > 10 min
-                    class_name = "ALERT"
-                elif appliance == "OVEN" and duration_sec > 14400: # Oven on > 4 hours
-                    class_name = "ALERT"
-                elif class_name == "NORMAL" and duration_sec > 28800: # Any appliance > 8 hours
-                    class_name = "UNEXPECTED"
-                
                 desc = (
                     f"Funcionamiento detectado de {appliance} con potencia de {power_watts:.1f}W "
                     f"por {duration_min} minutos."
                 )
                 
-                event = {
+                # Add local display event for Rich UI terminal
+                local_event = {
+                    "start_time": start_time.isoformat(),
+                    "type": appliance,
+                    "duration_minutes": duration_min,
+                    "description": desc,
+                    "power": power_watts
+                }
+                self.latest_events.append(local_event)
+                
+                # Package raw measurement segment payload to be sent to Django server
+                measurement_payload = {
                     "device_id": self.device_id,
                     "start_time": start_time.isoformat(),
                     "end_time": end_time.isoformat(),
-                    "type": appliance,
-                    "class_name": class_name,
-                    "description": desc
+                    "readings": on_transient["readings"]
                 }
                 
-                log.info(f"Appliance event created: {appliance} ({duration_min} min)")
-                await self.event_queue.put(event)
+                log.info(f"Appliance active cycle finished: matched ON/OFF. Enqueueing {len(on_transient['readings'])} samples.")
+                await self.event_queue.put(measurement_payload)
             else:
                 log.debug(f"Unmatched OFF transient of {dp:.1f}W. No matching ON transient found.")

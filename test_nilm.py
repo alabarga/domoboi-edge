@@ -33,6 +33,7 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
         """Simulates raw power readings and asserts that appliance events are correctly paired."""
         raw_queue = asyncio.Queue()
         event_queue = asyncio.Queue()
+        latest_events = []
         
         config = {
             "device_id": "test-device",
@@ -42,7 +43,7 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
             }
         }
         
-        processor = NILMProcessor(config, raw_queue, event_queue)
+        processor = NILMProcessor(config, raw_queue, event_queue, latest_events)
         
         # Start processor task
         proc_task = asyncio.create_task(processor.run())
@@ -85,14 +86,17 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
         # ON transient should be matched and removed from list
         self.assertEqual(len(processor.unmatched_on), 0)
         
-        # Event queue should have the complete event
+        # Event queue should have the complete measurement segment payload
         self.assertFalse(event_queue.empty())
-        event = await event_queue.get()
+        meas = await event_queue.get()
         
-        self.assertEqual(event["device_id"], "test-device")
-        self.assertEqual(event["type"], "KETTLE")
-        self.assertEqual(event["class_name"], "NORMAL")
-        self.assertIn("KETTLE", event["description"])
+        self.assertEqual(meas["device_id"], "test-device")
+        self.assertTrue("readings" in meas)
+        self.assertTrue(len(meas["readings"]) > 0)
+        
+        # UI events list should have the local display event
+        self.assertEqual(len(latest_events), 1)
+        self.assertEqual(latest_events[0]["type"], "KETTLE")
         
         # Cleanup
         await raw_queue.put(None)
@@ -129,22 +133,20 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
             os.rmdir(db_dir)
 
     async def test_offline_buffering_and_sync(self):
-        """Verifies events are saved to local SQLite on network failures, and syncs when connection returns."""
+        """Verifies measurements are saved to local SQLite on network failures, and syncs when connection returns."""
         # 1. Instantiate sender (no server running -> request fails)
-        sender = LTESender(self.config, self.event_queue)
+        sender = LTESender(self.config, self.event_queue, [])
         sender_task = asyncio.create_task(sender.run())
         
-        test_event = {
+        test_meas = {
             "device_id": "test-device",
             "start_time": datetime.now(timezone.utc).isoformat(),
             "end_time": datetime.now(timezone.utc).isoformat(),
-            "type": "FRIDGE",
-            "class_name": "NORMAL",
-            "description": "Test fridge event"
+            "readings": [10.5, 20.2, 350.0]
         }
         
-        # Push event to queue
-        await self.event_queue.put(test_event)
+        # Push measurement to queue
+        await self.event_queue.put(test_meas)
         
         # Wait for transmission attempt & fail
         await asyncio.sleep(0.2)
@@ -152,13 +154,13 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
         # Verify it was buffered in SQLite
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT payload FROM offline_events")
+        cursor.execute("SELECT payload FROM offline_measurements")
         rows = cursor.fetchall()
         conn.close()
         
         self.assertEqual(len(rows), 1)
         buffered_payload = json.loads(rows[0][0])
-        self.assertEqual(buffered_payload["type"], "FRIDGE")
+        self.assertEqual(buffered_payload["readings"], [10.5, 20.2, 350.0])
         
         # Stop sender task
         await self.event_queue.put(None)
@@ -175,7 +177,7 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
             return web.json_response({"status": "success"}, status=201)
             
         app = web.Application()
-        app.router.add_post("/nilm/api/events/", mock_handler)
+        app.router.add_post("/nilm/api/measurements/", mock_handler)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "localhost", 9099)
@@ -183,7 +185,7 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
         
         # Restart sender (server is now online)
         self.event_queue = asyncio.Queue()
-        sender = LTESender(self.config, self.event_queue)
+        sender = LTESender(self.config, self.event_queue, [])
         sender_task = asyncio.create_task(sender.run())
         
         # Wait for sync loop to run (sync_interval = 1 sec)
@@ -192,7 +194,7 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
         # Verify SQLite buffer is drained
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM offline_events")
+        cursor.execute("SELECT COUNT(*) FROM offline_measurements")
         count = cursor.fetchone()[0]
         conn.close()
         
@@ -200,7 +202,7 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
         
         # Verify server received the event
         self.assertEqual(len(mock_received), 1)
-        self.assertEqual(mock_received[0]["type"], "FRIDGE")
+        self.assertEqual(mock_received[0]["readings"], [10.5, 20.2, 350.0])
         
         # Stop mock server and sender task
         await self.event_queue.put(None)

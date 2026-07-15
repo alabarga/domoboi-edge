@@ -37,11 +37,11 @@ class LTESender:
         self.init_db()
 
     def init_db(self):
-        """Initialize the local SQLite database for offline buffering."""
+        """Initialize the local SQLite database for offline buffering of raw measurements."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS offline_events (
+            CREATE TABLE IF NOT EXISTS offline_measurements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -50,20 +50,21 @@ class LTESender:
         conn.commit()
         conn.close()
 
-    def buffer_event(self, event):
-        """Buffer event locally in SQLite."""
-        log.info("Buffering event locally in SQLite database due to network issues.")
+    def buffer_measurement(self, meas):
+        """Buffer raw measurement segment locally in SQLite."""
+        log.info("Buffering raw measurement segment locally in SQLite database due to network issues.")
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO offline_events (payload, created_at) VALUES (?, ?)",
-                (json.dumps(event), datetime.now(timezone.utc).isoformat())
+                "INSERT INTO offline_measurements (payload, created_at) VALUES (?, ?)",
+                (json.dumps(meas), datetime.now(timezone.utc).isoformat())
             )
             conn.commit()
             conn.close()
         except Exception as e:
-            log.error(f"Failed to buffer event to SQLite: {e}", exc_info=True)
+            log.error(f"Failed to buffer measurement to SQLite: {e}", exc_info=True)
+
 
     async def send_payload(self, session, url, payload):
         """Perform POST request with token authorization."""
@@ -87,29 +88,26 @@ class LTESender:
         log.info("LTE Sender started.")
         
         # Spawn the database sync loop in the background
-        sync_task = asyncio.create_task(self.sync_buffered_events_loop())
+        sync_task = asyncio.create_task(self.sync_buffered_measurements_loop())
         
         async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url.rstrip('/')}/nilm/api/events/"
+            url = f"{self.base_url.rstrip('/')}/nilm/api/measurements/"
             
             while True:
                 try:
-                    event = await self.event_queue.get()
-                    if event is None:
+                    meas = await self.event_queue.get()
+                    if meas is None:
                         # Sentinel to shut down
                         break
                     
-                    log.info(f"Attempting to transmit event: {event['type']}")
-                    if self.latest_events is not None:
-                        self.latest_events.append(event)
-                        
-                    success = await self.send_payload(session, url, event)
+                    log.info(f"Attempting to transmit measurement segment with {len(meas['readings'])} samples...")
+                    success = await self.send_payload(session, url, meas)
                     
                     if not success:
                         # Failed to send: store it in offline buffer
-                        self.buffer_event(event)
+                        self.buffer_measurement(meas)
                     else:
-                        log.info("Event successfully transmitted to Django backend.")
+                        log.info("Measurement segment successfully transmitted to Django backend.")
                         
                     self.event_queue.task_done()
                 except asyncio.CancelledError:
@@ -120,38 +118,38 @@ class LTESender:
                     
         sync_task.cancel()
 
-    async def sync_buffered_events_loop(self):
+    async def sync_buffered_measurements_loop(self):
         """Periodically runs to drain the offline buffer to Django when network is restored."""
-        url = f"{self.base_url.rstrip('/')}/nilm/api/events/"
+        url = f"{self.base_url.rstrip('/')}/nilm/api/measurements/"
         
         while True:
             try:
                 await asyncio.sleep(self.sync_interval)
                 
-                # Fetch pending events
+                # Fetch pending measurements
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, payload FROM offline_events ORDER BY id ASC")
+                cursor.execute("SELECT id, payload FROM offline_measurements ORDER BY id ASC")
                 rows = cursor.fetchall()
                 conn.close()
                 
                 if not rows:
                     continue
                 
-                log.info(f"Found {len(rows)} buffered events. Attempting to sync...")
+                log.info(f"Found {len(rows)} buffered measurement segments. Attempting to sync...")
                 
                 async with aiohttp.ClientSession() as session:
                     success_count = 0
                     for row_id, payload_str in rows:
-                        event = json.loads(payload_str)
+                        meas = json.loads(payload_str)
                         # Attempt transmission
-                        success = await self.send_payload(session, url, event)
+                        success = await self.send_payload(session, url, meas)
                         
                         if success:
                             # Remove from DB
                             conn = sqlite3.connect(self.db_path)
                             cursor = conn.cursor()
-                            cursor.execute("DELETE FROM offline_events WHERE id = ?", (row_id,))
+                            cursor.execute("DELETE FROM offline_measurements WHERE id = ?", (row_id,))
                             conn.commit()
                             conn.close()
                             success_count += 1
@@ -161,7 +159,7 @@ class LTESender:
                             break
                             
                     if success_count > 0:
-                        log.info(f"Successfully synchronized {success_count} buffered events to Django backend.")
+                        log.info(f"Successfully synchronized {success_count} buffered segments to Django backend.")
                         
             except asyncio.CancelledError:
                 break
