@@ -78,6 +78,12 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
     except Exception as e:
         log.error(f"Failed to initialize ATM90E36 hardware: {e}", exc_info=True)
         # We still continue the thread loop in case connection recovers or registers become readable
+    
+    # Startup guard: discard readings for the first few seconds after chip init
+    # The ATM90E36 produces a large SPI noise spike during its first register reads
+    startup_guard_sec = nilm_cfg.get("startup_guard_sec", 3.0)
+    startup_time = time_ms()
+    log.info(f"Startup guard active: discarding readings for {startup_guard_sec}s to filter init noise...")
         
     while not stop_event.is_set():
         start_time = time_now = time_ms()
@@ -127,8 +133,11 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
                 "temperature": temp
             })
             
-            # Safely schedule addition into asyncio queue
-            loop.call_soon_threadsafe(raw_queue.put_nowait, meas)
+            # Only enqueue to NILM processor after startup guard has elapsed
+            elapsed_since_start = (time_ms() - startup_time) / 1000.0
+            if elapsed_since_start >= startup_guard_sec:
+                # Safely schedule addition into asyncio queue
+                loop.call_soon_threadsafe(raw_queue.put_nowait, meas)
             
         except Exception as e:
             log.error(f"Error reading ATM90E36 hardware registers: {e}")
