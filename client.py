@@ -195,7 +195,7 @@ async def run_rich_dashboard(config):
                 table.add_row("Last Poll Time", t_disp, "10 Hz Polling")
                 table.add_row("Voltage", v_disp, v_status)
                 table.add_row("Current", f"{i:.3f} A", "Active CT" if i > 0.005 else "Idle")
-                table.add_row("Active Power", f"{p:.1f} W", "Load ON" if p > 10.0 else "Idle")
+                table.add_row("Active Power", f"{p:.1f} W", "Load ON" if p > 30.0 else "Idle")
                 table.add_row("Frequency", f"{freq:.2f} Hz", "Normal" if 49.0 <= freq <= 51.0 else "Unstable")
                 table.add_row("Chip Temp", f"{temp:.1f} °C", "Normal")
                 
@@ -230,11 +230,20 @@ async def run_rich_dashboard(config):
                     bar_str = "█" * blocks + "░" * (10 - blocks)
                     power_disp = f"[{bar_str}] {ev_p:.1f}W"
                     
+                    dur_sec = ev.get("duration_seconds")
+                    if dur_sec is not None:
+                        if dur_sec < 300:
+                            dur_disp = f"{dur_sec}s"
+                        else:
+                            dur_disp = f"{int(dur_sec / 60)}m"
+                    else:
+                        dur_disp = f"{ev.get('duration_minutes', 0)}m"
+                    
                     events_table.add_row(
                         ev.get("start_time", "")[:19].replace("T", " "),
                         ev.get("type", "UNKNOWN"),
                         power_disp,
-                        f"{ev.get('duration_minutes', 0)} min",
+                        dur_disp,
                         ev.get("description", "")
                     )
                     

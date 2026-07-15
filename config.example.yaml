@@ -37,6 +37,7 @@ calibration:
 nilm:
   sampling_interval_sec: 0.1      # Poll ATM90E36 every 100ms (10 Hz sampling)
   transient_threshold_watts: 40.0 # Min delta-P (Watts) to declare a transient
+  stability_threshold_watts: 3.0  # Max standard deviation (Watts) to declare a window stable
   match_window_seconds: 3600      # Max time (1 hour) to match ON and OFF transients
 
 # Django Ingestion API Configuration

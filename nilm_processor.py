@@ -24,13 +24,27 @@ class NILMProcessor:
         self.match_window = nilm_cfg.get("match_window_seconds", 3600)
         self.device_id = config.get("device_id", "domoboi-01")
         
-        # Sliding buffer to compute a rolling baseline (e.g. past 1 second)
+        # Sliding buffer for step detection
         # At 10Hz sampling rate, 10 samples = 1 second.
+        # We split this into a 5-sample pre-window and 5-sample post-window.
         self.history_size = 10
         self.power_history = []
         
+        # Stability threshold for standard deviation (in Watts)
+        self.stability_threshold = nilm_cfg.get("stability_threshold_watts", 3.0)
+        self.cooldown = 0
+        
         # List of unmatched ON transients: [{"timestamp": dt, "power": float, "readings": list}]
         self.unmatched_on = []
+
+    def _calculate_mean_and_std(self, samples):
+        n = len(samples)
+        if n == 0:
+            return 0.0, 0.0
+        mean = sum(samples) / n
+        variance = sum((x - mean) ** 2 for x in samples) / n
+        std = variance ** 0.5
+        return mean, std
 
     async def run(self):
         log.info("NILM Processor started.")
@@ -56,16 +70,24 @@ class NILMProcessor:
                 if len(self.power_history) > self.history_size:
                     self.power_history.pop(0)
                 
-                # Check for transient events once history is full
-                if len(self.power_history) == self.history_size:
-                    # Calculate baseline as average of the older samples
-                    baseline = sum(self.power_history[:-1]) / (self.history_size - 1.0)
-                    delta_p = power - baseline
+                if self.cooldown > 0:
+                    self.cooldown -= 1
+                
+                # Check for transient events once history is full and cooldown is 0
+                if len(self.power_history) == self.history_size and self.cooldown == 0:
+                    # Split into pre-state (first 5 samples) and post-state (last 5 samples)
+                    pre_window = self.power_history[:5]
+                    post_window = self.power_history[5:]
                     
-                    if abs(delta_p) >= self.threshold:
-                        # Reset window with the new power level to avoid re-triggering
-                        self.power_history = [power] * self.history_size
-                        
+                    mean_pre, std_pre = self._calculate_mean_and_std(pre_window)
+                    mean_post, std_post = self._calculate_mean_and_std(post_window)
+                    
+                    delta_p = mean_post - mean_pre
+                    
+                    # Sustained change condition: delta >= threshold and both pre/post windows are stable
+                    if abs(delta_p) >= self.threshold and std_pre <= self.stability_threshold and std_post <= self.stability_threshold:
+                        # Trigger cooldown (5 samples) to let the step slide completely out of the detector window
+                        self.cooldown = 5
                         await self.handle_transient(timestamp, delta_p)
                         
                 self.raw_queue.task_done()
@@ -122,19 +144,23 @@ class NILMProcessor:
                 end_time = now
                 power_watts = on_transient["power"]
                 
-                duration_sec = (end_time - start_time).total_seconds()
-                duration_min = int(duration_sec / 60)
+                duration_sec = int((end_time - start_time).total_seconds())
+                
+                if duration_sec < 300:
+                    duration_str = f"{duration_sec} segundos"
+                else:
+                    duration_str = f"{int(duration_sec / 60)} minutos"
                 
                 desc = (
                     f"Consumo detectado con potencia de {power_watts:.1f}W "
-                    f"por {duration_min} minutos."
+                    f"por {duration_str}."
                 )
                 
                 # Add local display event for Rich UI terminal
                 local_event = {
                     "start_time": start_time.isoformat(),
                     "type": "CYCLE",
-                    "duration_minutes": duration_min,
+                    "duration_seconds": duration_sec,
                     "description": desc,
                     "power": power_watts
                 }
