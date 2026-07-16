@@ -37,17 +37,18 @@ if lsusb | grep -qi "quectel"; then
   for port in /dev/ttyUSB3 /dev/ttyUSB2 /dev/ttyUSB1; do
     if [ -e "$port" ]; then
       if python3 -c "
-import time, sys, select
+import time, sys, os
 try:
     with open(sys.argv[1], 'r+b', buffering=0) as f:
-        r, _, _ = select.select([f], [], [], 0.05)
-        if r: f.read(1024)
-        f.write(b'AT\\r\\n')
+        os.set_blocking(f.fileno(), False)
+        f.read(1024)
+        f.write(b'AT\r\n')
         resp = b''
         for _ in range(4):
             time.sleep(0.15)
-            r, _, _ = select.select([f], [], [], 0.05)
-            if r: resp += f.read(1024)
+            chunk = f.read(1024)
+            if chunk:
+                resp += chunk
         if b'OK' in resp:
             sys.exit(0)
 except Exception:
@@ -100,22 +101,19 @@ sys.exit(1)
     while true; do
       echo "Checking SIM card status..."
       SIM_STATUS=$(python3 -c "
-import time, sys, select, termios
+import time, sys, os
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        # Flush termios serial buffers to clear any garbage characters
-        try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
-        except Exception: pass
-            
-        f.write(b'AT+CPIN?\\r\\n')
+        os.set_blocking(f.fileno(), False)
+        f.read(1024)
+        f.write(b'AT+CPIN?\r\n')
         resp = ''
-        # Read multiple times over 1.2 seconds to capture the full response
         for _ in range(4):
             time.sleep(0.3)
-            r, _, _ = select.select([f], [], [], 0.1)
-            if r:
-                resp += f.read(1024).decode(errors='ignore')
+            chunk = f.read(1024)
+            if chunk:
+                resp += chunk.decode(errors='ignore')
         
         if 'READY' in resp:
             print('READY')
@@ -154,20 +152,19 @@ except Exception:
           # Verify unlock status
           echo "Verifying unlock status..."
           SIM_STATUS=$(python3 -c "
-import time, sys, select, termios
+import time, sys, os
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        # Flush termios serial buffers to clear any garbage characters
-        try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
-        except Exception: pass
-        f.write(b'AT+CPIN?\\r\\n')
+        os.set_blocking(f.fileno(), False)
+        f.read(1024)
+        f.write(b'AT+CPIN?\r\n')
         resp = ''
         for _ in range(4):
             time.sleep(0.3)
-            r, _, _ = select.select([f], [], [], 0.1)
-            if r:
-                resp += f.read(1024).decode(errors='ignore')
+            chunk = f.read(1024)
+            if chunk:
+                resp += chunk.decode(errors='ignore')
         if 'READY' in resp:
             print('READY')
             sys.exit(0)
@@ -243,7 +240,7 @@ except Exception:
     echo "✅  $MODEM_PORT is now present"
     sleep 2
     if python3 - "$MODEM_PORT" <<'PY'
-import time, sys, re, select
+import time, sys, re, os
 port = sys.argv[1]
 start_time = time.time()
 registered = False
@@ -253,19 +250,18 @@ attempt = 0
 def send_cmd(cmd, wait=0.5):
     try:
         with open(port, 'r+b', buffering=0) as f:
+            os.set_blocking(f.fileno(), False)
             # Clean buffers by reading outstanding data
-            r, _, _ = select.select([f], [], [], 0.05)
-            if r:
-                f.read(1024)
+            f.read(1024)
             # Write command
             f.write(cmd + b'\r\n')
             # Read response
             resp = b""
             for _ in range(4):
                 time.sleep(wait / 4.0)
-                r, _, _ = select.select([f], [], [], 0.05)
-                if r:
-                    resp += f.read(1024)
+                chunk = f.read(1024)
+                if chunk:
+                    resp += chunk
             return resp.decode(errors='ignore')
     except Exception:
         return ""

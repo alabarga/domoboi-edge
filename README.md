@@ -222,25 +222,29 @@ ip route show
 
 
 ### Cellular Modem Diagnostics (AT Commands)
-If the virtual cellular interface is not appearing or you have packet delivery issues, query the modem directly via Python serial inline commands on `/dev/ttyUSB2` (or `/dev/ttyUSB3` depending on hardware firmware):
+If the virtual cellular interface is not appearing or you have packet delivery issues, query the modem directly via Python serial inline commands on `/dev/ttyUSB3` (or `/dev/ttyUSB2` depending on hardware firmware):
 
 ```bash
 # 1. Query SIM card PIN status
-sudo python3 -c "import time; f=open('/dev/ttyUSB2', 'r+b', buffering=0); f.write(b'AT+CPIN?\r\n'); [time.sleep(0.3) or print(f.read(1024).decode(errors='ignore'), end='') for _ in range(4)]"
+sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+CPIN?\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
 # Expected response: +CPIN: READY (unlocked)
 
 # 2. Query cellular registration status
-sudo python3 -c "import time; f=open('/dev/ttyUSB2', 'r+b', buffering=0); f.write(b'AT+CREG?\r\n'); [time.sleep(0.3) or print(f.read(1024).decode(errors='ignore'), end='') for _ in range(4)]"
+sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+CREG?\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
 # Response Codes (+CREG: <mode>, <status>):
 #   0,1 or 0,5 : Registered successfully (Home / Roaming)
 #   0,2        : Not registered, but searching/scanning for a network (Wait 1-2 mins, check antennas)
 #   0,0 or 0,3 : Registration denied or not searching (Verify SIM card activation/carrier contract)
 
 # 3. Query packet/data service attachment
-sudo python3 -c "import time; f=open('/dev/ttyUSB2', 'r+b', buffering=0); f.write(b'AT+CGATT?\r\n'); [time.sleep(0.3) or print(f.read(1024).decode(errors='ignore'), end='') for _ in range(4)]"
+sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+CGATT?\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
 # Expected response: +CGATT: 1 (packet service attached)
 
 # 4. Query active operator network name
-sudo python3 -c "import time; f=open('/dev/ttyUSB2', 'r+b', buffering=0); f.write(b'AT+COPS?\r\n'); [time.sleep(0.3) or print(f.read(1024).decode(errors='ignore'), end='') for _ in range(4)]"
+sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+COPS?\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
 # Expected response: +COPS: 0,0,"Operator_Name"
+
+# 5. Query signal strength (RSSI)
+sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+CSQ\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
+# Expected response: +CSQ: <rssi>,<ber> (e.g., +CSQ: 18,99; where rssi 0-31; 31 is best, 99 is unknown)
 ```
