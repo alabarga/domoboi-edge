@@ -55,41 +55,48 @@ nmcli connection show --active
 
 ## 4. Automated Installation & Setup
 
-We provide a `setup.sh` script that automates the deployment:
+We divide deployment and configuration into two sequential phases to handle the physical reboot required by the Raspberry Pi 5 USB current firmware overrides:
+
+### Phase 1: Environment & System Setup (`setup.sh`)
+This script configures the system base and registers the core service:
 1. **System Packages**: Installs `python3-pip`, `python3-venv`, `libatlas-base-dev`, `i2c-tools`, `cmake`, and `build-essential`.
 2. **Locales**: Generates Spanish locale definitions (`es_ES.UTF-8`) to prevent runtime encoding exceptions.
 3. **Hardware Modules**: Appends `dtparam=spi=on` and `dtparam=i2c_arm=on` to `/boot/firmware/config.txt` to enable SPI and I2C buses on reboot.
-4. **RPi 5 Current Override**: Appends `usb_max_current_enable=1` to the firmware configuration.
+4. **RPi 5 Current Override**: Appends `usb_max_current_enable=1` to the firmware configuration to allow 1.6A output on USB.
 5. **Permissions & Python Environment**: Initializes a python virtual environment (`.venv`), chowns it to the local user to prevent permissions errors, and installs dependencies (`rich`, `smbus2`, `spidev`, `pyyaml`, `aiohttp`).
 6. **C Utility Compiling**: Generates and compiles `testctread` in `testctread/build`.
 7. **Systemd Service**: Registers and enables the `domoboi-edge` service.
-8. **Modem Configuration**: Auto-detects whether the Quectel control interface is on `/dev/ttyUSB2` or `/dev/ttyUSB3` and configures it into ECM mode, loading SIM PIN and APN credentials directly from `config.yaml`.
-9. **Automatic Configuration Provisioning**: Automatically generates `config.yaml` from `config.example.yaml` (if not already present) and reads configuration parameters from it without interactive prompting.
 
-To install:
+### Phase 2: Modem, Registration, & Network Priorities (`net.sh`)
+This script configures the cellular connections, performs checks, and sets connection metric priorities:
+1. **Modem Configuration**: Auto-detects whether the Quectel control interface is on `/dev/ttyUSB2` or `/dev/ttyUSB3` and configures it into ECM mode, loading SIM PIN and APN credentials directly from `config.yaml`.
+2. **Network Registration Wait Loop**: Diagnostics loop that waits for modem registry attachment and reports signal RSSI/BER telemetry in real-time.
+3. **Network Priority (WiFi vs. Cellular Backup)**: Configures NetworkManager route metrics to prioritize WiFi (metric 100) over cellular (metric 300) to prevent cellular data charges.
+4. **Verification**: Initiates a ping test to Google via the cellular interface.
+
+### Deployment Sequence
+To install and deploy:
 ```bash
 # 1. Copy the example configuration file
 cp config.example.yaml config.yaml
 
-# 2. Open and fill in the required parameters (API token, base URL, and modem SIM PIN/APN)
+# 2. Open and fill in the required parameters (API token, base URL, and optionally modem SIM PIN/APN)
 nano config.yaml
 
-# 3. Make setup script executable and run it
-chmod +x setup.sh
+# 3. Run the system setup script
+chmod +x setup.sh net.sh
 sudo ./setup.sh
+
+# 4. REBOOT the Raspberry Pi 5 to apply the USB current overrides!
+sudo reboot
+
+# 5. After reboot, configure the modem and network priorities
+sudo ./net.sh
 ```
-
-
 
 ### USB Current Override
-
 The Quectel LTE mini-PCIe module can consume significant current under weak cellular coverage, which exceeds the default Raspberry Pi 5 USB current limits.
-
-To prevent the LTE modem from resetting or brown-outing the Pi, you **must override the USB current limit** to allow 1.6A output. Add the following line to the end of your Pi's configuration file:
-```ini
-# Edit /boot/firmware/config.txt (or /boot/config.txt on older OS versions)
-usb_max_current_enable=1
-```
+To prevent the LTE modem from resetting or brown-outing the Pi, you **must override the USB current limit** to allow 1.6A output. This is handled automatically by `setup.sh` appending `usb_max_current_enable=1` to `/boot/firmware/config.txt`.
 
 ### Network Interface Configuration (ECM Mode)
 The modem is configured in **Ethernet Control Model (ECM)** mode. It exposes a virtual network card interface named **`usb0`**:
@@ -99,13 +106,6 @@ The modem is configured in **Ethernet Control Model (ECM)** mode. It exposes a v
   ```bash
   ping -I usb0 google.com
   ```
-
-### SIM Card PIN Unlock
-If your SIM card is locked, permanent locking must be disabled. This is handled during setup using:
-```bash
-# Unlock SIM via QMI tool (assuming PIN 1121)
-sudo qmicli -d /dev/cdc-wdm0 --uim-verify-pin=PIN1,1121
-```
 
 ---
 
