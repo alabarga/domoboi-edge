@@ -195,6 +195,22 @@ nmcli connection show --active
 ip addr show usb0  # replace 'usb0' with the interface name from nmcli
 ```
 
+### Network Priority (WiFi vs. Cellular Backup)
+To prevent generating high cellular billing charges when local WiFi is available, the system prioritizes connection routes by adjusting the NetworkManager routing metric (lower metric = higher priority):
+* **WiFi Connections**: Metric set to `100` (preferred route).
+* **Cellular Modem Connection (`usb0`/`lte-modem`)**: Metric set to `300` (failover backup route).
+
+All internet traffic will be routed over WiFi by default. If WiFi drops out, the system automatically switches to the cellular connection without interruption, and reverts to WiFi immediately once coverage is restored.
+
+To view your current routing priorities, execute:
+```bash
+ip route show
+# Look for 'metric <value>' in the default routes:
+# default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.50 metric 100
+# default via 192.168.225.1 dev usb0 proto dhcp src 192.168.225.26 metric 300
+```
+
+
 ### Cellular Modem Diagnostics (AT Commands)
 If the virtual cellular interface is not appearing or you have packet delivery issues, query the modem directly via Python serial inline commands on `/dev/ttyUSB2` (or `/dev/ttyUSB3` depending on hardware firmware):
 

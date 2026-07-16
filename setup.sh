@@ -127,15 +127,40 @@ if lsusb | grep -qi "quectel"; then
       APN_NAME="internet"
     fi
     
-    echo "Checking SIM PIN lock status..."
-    CPIN_STATUS=$(python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CPIN?\r\n'); time.sleep(0.4); print(f.read(1024).decode(errors='ignore'))" 2>/dev/null || true)
+    echo "Checking SIM card status..."
+    SIM_STATUS=$(python3 -c "
+import time, sys
+port = sys.argv[1]
+try:
+    with open(port, 'r+b', buffering=0) as f:
+        f.write(b'AT+CPIN?\\r\\n')
+        time.sleep(0.4)
+        resp = f.read(1024).decode(errors='ignore')
+        if 'READY' in resp:
+            print('READY')
+            sys.exit(0)
+        elif 'SIM PIN' in resp:
+            print('LOCKED')
+            sys.exit(1)
+        elif 'NOT INSERTED' in resp or 'ERROR' in resp:
+            print('NOT_INSERTED')
+            sys.exit(2)
+        else:
+            print('UNKNOWN')
+            sys.exit(3)
+except Exception:
+    print('PORT_ERROR')
+    sys.exit(4)
+" "$MODEM_PORT" || true)
+
+    echo "Detected SIM Status: $SIM_STATUS"
     
-    if echo "$CPIN_STATUS" | grep -q "+CPIN: READY"; then
+    if [ "$SIM_STATUS" = "READY" ]; then
       echo "SIM is already unlocked/READY. Skipping PIN disable step."
-    else
+    elif [ "$SIM_STATUS" = "LOCKED" ]; then
       # Prompt for SIM PIN if not defined in config and running interactively
       if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
-        read -p "Enter your SIM card PIN (or press Enter to skip if no PIN): " -r SIM_PIN
+        read -p "SIM is PIN locked. Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
       fi
       
       if [ -n "$SIM_PIN" ]; then
@@ -143,6 +168,10 @@ if lsusb | grep -qi "quectel"; then
         python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
         sleep 1
       fi
+    elif [ "$SIM_STATUS" = "NOT_INSERTED" ]; then
+      echo "Warning: SIM card not inserted or not detected. Please verify SIM is physically present."
+    else
+      echo "Warning: Unable to determine SIM status (Response: $SIM_STATUS). Skipping PIN step."
     fi
     
     # Configure APN in profile 1
@@ -169,41 +198,80 @@ if lsusb | grep -qi "quectel"; then
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
     echo "Waiting for cellular modem to boot, register, and establish a data connection..."
     if python3 -c "
-import time, sys
+import time, sys, re
 port = sys.argv[1]
 start_time = time.time()
 registered = False
 rssi = 99
-while time.time() - start_time < 90:
+attempt = 0
+while time.time() - start_time < 150:
+    attempt += 1
+    cpin_state = 'UNKNOWN'
+    creg_state = 'UNKNOWN'
+    csq_state = 'UNKNOWN'
     try:
         with open(port, 'r+b', buffering=0) as f:
+            # Drain any pending unsolicited messages/SMS alerts from the buffer
+            time.sleep(0.1)
+            try:
+                f.read(2048)
+            except Exception:
+                pass
+                
+            # Query PIN status
+            f.write(b'AT+CPIN?\\r\\n')
+            time.sleep(0.3)
+            cpin_resp = f.read(1024).decode(errors='ignore')
+            if 'READY' in cpin_resp:
+                cpin_state = 'READY'
+            elif 'SIM PIN' in cpin_resp:
+                cpin_state = 'PIN_LOCKED'
+            elif 'NOT INSERTED' in cpin_resp:
+                cpin_state = 'NO_SIM'
+                
             # Query network registration status (AT+CREG?)
             f.write(b'AT+CREG?\\r\\n')
-            time.sleep(0.4)
+            time.sleep(0.3)
             resp = f.read(1024).decode(errors='ignore')
-            if '+CREG: 0,1' in resp or '+CREG: 0,5' in resp:
-                registered = True
+            reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', resp)
+            if reg_match:
+                status = int(reg_match.group(1))
+                if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
+                elif status == 1: creg_state = 'REGISTERED_HOME'
+                elif status == 2: creg_state = 'SEARCHING'
+                elif status == 3: creg_state = 'REGISTRATION_DENIED'
+                elif status == 4: creg_state = 'UNKNOWN'
+                elif status == 5: creg_state = 'REGISTERED_ROAMING'
                 
-                # Query signal strength (AT+CSQ)
-                f.write(b'AT+CSQ\\r\\n')
-                time.sleep(0.4)
-                csq_resp = f.read(1024).decode(errors='ignore')
-                for line in csq_resp.split('\\n'):
-                    if '+CSQ:' in line:
-                        try:
-                            rssi = int(line.split(':')[1].split(',')[0].strip())
-                        except Exception:
-                            pass
-                break
-    except Exception:
-        pass
+                if status in (1, 5):
+                    registered = True
+                    
+            # Query signal strength (AT+CSQ)
+            f.write(b'AT+CSQ\\r\\n')
+            time.sleep(0.3)
+            csq_resp = f.read(1024).decode(errors='ignore')
+            for line in csq_resp.split('\\n'):
+                if '+CSQ:' in line:
+                    csq_state = line.split(':')[1].strip()
+                    try:
+                        rssi = int(line.split(':')[1].split(',')[0].strip())
+                    except Exception:
+                        pass
+    except Exception as e:
+        cpin_state = f'PORT_ERROR ({type(e).__name__})'
+        
+    elapsed = int(time.time() - start_time)
+    print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal (RSSI,BER): {csq_state} | Elapsed: {elapsed}s')
+    sys.stdout.flush()
+    if registered:
+        break
     time.sleep(4.0)
 
 if registered:
     print(f'SUCCESS: Registered on network. Signal strength RSSI: {rssi}/31')
     sys.exit(0)
 else:
-    print('TIMEOUT: Modem failed to register within 90 seconds.')
+    print('TIMEOUT: Modem failed to register within 150 seconds.')
     sys.exit(1)
 " "$MODEM_PORT"; then
       # Wait a brief moment for interface allocation and DHCP lease
@@ -230,10 +298,29 @@ else:
     echo "Modem control ports (/dev/ttyUSB2 or /dev/ttyUSB3) not found. Skipping AT configuration."
   fi
 
-  # Add NetworkManager GSM connection configuration for standard dial fallback
-  echo "Adding cellular connection profile in NetworkManager..."
-  nmcli connection delete lte-modem 2>/dev/null || true
-  nmcli connection add type gsm ifname '*' con-name lte-modem apn "$APN_NAME" || true
+  # Configure route-metric to prioritize WiFi (higher priority / lower metric) over Cellular (lower priority / higher metric)
+  echo "Setting connection route metrics to prioritize WiFi (metric 100) over Cellular (metric 300)..."
+  sudo nmcli connection modify lte-modem ipv4.route-metric 300 ipv6.route-metric 300 || true
+  sudo nmcli connection modify netplan-eth0 ipv4.route-metric 300 ipv6.route-metric 300 || true
+  
+  # For all active and saved WiFi profiles, set route-metric to 100
+  # Matches newer NetworkManager types like '802-11-wireless' as well as legacy 'wifi'
+  for conn in $(nmcli -g NAME,TYPE connection show | grep :vpn -v | grep -E ":802-11-wireless|:wireless|:wifi" | cut -d: -f1); do
+    echo "Prioritizing WiFi connection: $conn"
+    sudo nmcli connection modify "$conn" ipv4.route-metric 100 ipv6.route-metric 100 || true
+  done
+  sudo nmcli connection reload || true
+  
+  # Restart NetworkManager connections / reapply configurations to apply the new metrics immediately
+  echo "Applying route metrics changes..."
+  if [ -n "$IFACE" ]; then
+    echo "Reapplying settings to cellular interface '$IFACE'..."
+    sudo nmcli device reapply "$IFACE" 2>/dev/null || sudo nmcli connection up netplan-eth0 2>/dev/null || true
+  fi
+  for dev in $(nmcli -t -f DEVICE,TYPE device | grep ":wifi" | cut -d: -f1); do
+    echo "Reapplying settings to WiFi interface '$dev'..."
+    sudo nmcli device reapply "$dev" 2>/dev/null || true
+  done
 else
   echo "Quectel modem not found on USB. Ensure it is connected and powered."
 fi
