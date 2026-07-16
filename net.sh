@@ -229,36 +229,39 @@ except Exception:
     
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
     echo "Waiting for cellular modem to boot, register, and establish a data connection..."
-    if python3 -c "
-import time, sys, re, select, termios
+    while [ ! -e "$MODEM_PORT" ]; do
+      echo "⏳  Waiting for $MODEM_PORT to appear..."
+      sleep 1
+    done
+    echo "✅  $MODEM_PORT is now present."
+
+    if python3 - <<'PY' "$MODEM_PORT"
+import time, sys, re, select, termios, os
 port = sys.argv[1]
 start_time = time.time()
 registered = False
 rssi = 99
 attempt = 0
 
-def send_cmd(cmd, wait=0.5):
-    try:
-        with open(port, 'r+b', buffering=0) as f:
-            try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
-            except Exception: pass
-            f.write(cmd + b'\\r\\n')
-            time.sleep(wait)
-            
-            resp = b''
-            r, _, _ = select.select([f], [], [], 0.1)
-            if r:
-                resp = f.read(1024)
-                if not resp:
-                    return 'PORT_ERROR (EOF)'
-            return resp.decode(errors='ignore')
-    except Exception as e:
-        return f'PORT_ERROR ({type(e).__name__})'
+def send_cmd(cmd, wait=1.0):
+    fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
+    # Ensure DTR/RTS are asserted (CLOCAL + CRTSCTS)
+    attrs = termios.tcgetattr(fd)
+    attrs[2] |= termios.CLOCAL | termios.CRTSCTS
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    termios.tcflush(fd, termios.TCIOFLUSH)
+    os.write(fd, cmd + b'\r\n')
+    time.sleep(wait)
+    r, _, _ = select.select([fd], [], [], 0.5)
+    resp = b""
+    if r:
+        resp = os.read(fd, 1024)
+    os.close(fd)
+    return resp.decode(errors='ignore')
 
 while time.time() - start_time < 150:
     attempt += 1
-    
-    # 1. Query PIN status
+    # 1. SIM status
     cpin_resp = send_cmd(b'AT+CPIN?')
     cpin_state = 'UNKNOWN'
     if 'READY' in cpin_resp:
@@ -267,52 +270,36 @@ while time.time() - start_time < 150:
         cpin_state = 'PIN_LOCKED'
     elif 'NOT INSERTED' in cpin_resp:
         cpin_state = 'NO_SIM'
-    elif 'PORT_ERROR' in cpin_resp:
-        cpin_state = cpin_resp
-        
-    time.sleep(1.0)  # Pause to avoid buffer / timing issues
-    
-    # 2. Query network registration status (AT+CREG?)
+    # 2. Network registration
     creg_resp = send_cmd(b'AT+CREG?')
     creg_state = 'UNKNOWN'
-    if 'PORT_ERROR' in creg_resp:
-        creg_state = creg_resp
-    else:
-        reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', creg_resp)
-        if reg_match:
-            status = int(reg_match.group(1))
-            if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
-            elif status == 1: creg_state = 'REGISTERED_HOME'
-            elif status == 2: creg_state = 'SEARCHING'
-            elif status == 3: creg_state = 'REGISTRATION_DENIED'
-            elif status == 4: creg_state = 'UNKNOWN'
-            elif status == 5: creg_state = 'REGISTERED_ROAMING'
-            
-            if status in (1, 5):
-                registered = True
-                
-    time.sleep(1.0)  # Pause to avoid buffer / timing issues
-    
-    # 3. Query signal strength (AT+CSQ)
+    reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', creg_resp)
+    if reg_match:
+        status = int(reg_match.group(1))
+        if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
+        elif status == 1: creg_state = 'REGISTERED_HOME'
+        elif status == 2: creg_state = 'SEARCHING'
+        elif status == 3: creg_state = 'REGISTRATION_DENIED'
+        elif status == 4: creg_state = 'UNKNOWN'
+        elif status == 5: creg_state = 'REGISTERED_ROAMING'
+        if status in (1, 5):
+            registered = True
+    # 3. Signal strength
     csq_resp = send_cmd(b'AT+CSQ')
     csq_state = 'UNKNOWN'
-    if 'PORT_ERROR' in csq_resp:
-        csq_state = csq_resp
-    else:
-        for line in csq_resp.split('\\n'):
-            if '+CSQ:' in line:
-                csq_state = line.split(':')[1].strip()
-                try:
-                    rssi = int(line.split(':')[1].split(',')[0].strip())
-                except Exception:
-                    pass
-        
+    for line in csq_resp.split('\n'):
+        if '+CSQ:' in line:
+            csq_state = line.split(':')[1].strip()
+            try:
+                rssi = int(line.split(':')[1].split(',')[0].strip())
+            except Exception:
+                pass
     elapsed = int(time.time() - start_time)
     print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal: {csq_state} | Elapsed: {elapsed}s')
     sys.stdout.flush()
     if registered:
         break
-    time.sleep(8.0)
+    time.sleep(8)
 
 if registered:
     print(f'SUCCESS: Registered on network. Signal strength RSSI: {rssi}/31')
@@ -320,7 +307,7 @@ if registered:
 else:
     print('TIMEOUT: Modem failed to register within 150 seconds.')
     sys.exit(1)
-" "$MODEM_PORT"; then
+PY; then
       # Wait a brief moment for interface allocation and DHCP lease
       echo "Waiting 5 seconds for IP address assignment..."
       sleep 5
