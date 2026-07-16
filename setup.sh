@@ -127,8 +127,9 @@ if lsusb | grep -qi "quectel"; then
       APN_NAME="internet"
     fi
     
-    echo "Checking SIM card status..."
-    SIM_STATUS=$(python3 -c "
+    while true; do
+      echo "Checking SIM card status..."
+      SIM_STATUS=$(python3 -c "
 import time, sys
 port = sys.argv[1]
 try:
@@ -153,26 +154,43 @@ except Exception:
     sys.exit(4)
 " "$MODEM_PORT" || true)
 
-    echo "Detected SIM Status: $SIM_STATUS"
-    
-    if [ "$SIM_STATUS" = "READY" ]; then
-      echo "SIM is already unlocked/READY. Skipping PIN disable step."
-    elif [ "$SIM_STATUS" = "LOCKED" ]; then
-      # Prompt for SIM PIN if not defined in config and running interactively
-      if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
-        read -p "SIM is PIN locked. Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
-      fi
+      echo "Detected SIM Status: $SIM_STATUS"
       
-      if [ -n "$SIM_PIN" ]; then
-        echo "Disabling SIM PIN lock..."
-        python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
-        sleep 1
+      if [ "$SIM_STATUS" = "READY" ]; then
+        echo "SIM is already unlocked/READY. Skipping PIN disable step."
+        break
+      elif [ "$SIM_STATUS" = "LOCKED" ]; then
+        # Prompt for SIM PIN if not defined in config and running interactively
+        if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
+          read -p "SIM is PIN locked. Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
+        fi
+        
+        if [ -n "$SIM_PIN" ]; then
+          echo "Disabling SIM PIN lock..."
+          python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
+          sleep 1
+        fi
+        break
+      else
+        if [ -t 0 ]; then
+          echo "------------------------------------------------------------------"
+          echo "WARNING: SIM card is not ready (Status: $SIM_STATUS)."
+          echo "Please ensure:"
+          echo " 1. The SIM card is physically inserted in the correct orientation."
+          echo " 2. The coaxial pigtail is snapped into the 'MAIN' LTE port."
+          echo " 3. The modem is powered on and has completed booting."
+          echo "------------------------------------------------------------------"
+          read -p "Press [Enter] to retry SIM detection, or type 's' to skip: " -r USER_CHOICE
+          if [ "$USER_CHOICE" = "s" ] || [ "$USER_CHOICE" = "S" ]; then
+            echo "Skipping SIM configuration as requested."
+            break
+          fi
+        else
+          echo "Non-interactive shell: Skipping SIM step since status is $SIM_STATUS."
+          break
+        fi
       fi
-    elif [ "$SIM_STATUS" = "NOT_INSERTED" ]; then
-      echo "Warning: SIM card not inserted or not detected. Please verify SIM is physically present."
-    else
-      echo "Warning: Unable to determine SIM status (Response: $SIM_STATUS). Skipping PIN step."
-    fi
+    done
     
     # Configure APN in profile 1
     echo "Configuring modem APN to '$APN_NAME'..."
