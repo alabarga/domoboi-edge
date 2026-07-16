@@ -236,89 +236,83 @@ start_time = time.time()
 registered = False
 rssi = 99
 attempt = 0
-while time.time() - start_time < 150:
-    attempt += 1
-    cpin_state = 'UNKNOWN'
-    creg_state = 'UNKNOWN'
-    csq_state = 'UNKNOWN'
+
+def send_cmd(cmd, wait=0.5):
     try:
         with open(port, 'r+b', buffering=0) as f:
-            # Flush termios serial buffers to clear any garbage characters on open
             try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
             except Exception: pass
+            f.write(cmd + b'\\r\\n')
+            time.sleep(wait)
             
-            # Query PIN status
-            f.write(b'AT+CPIN?\\r\\n')
-            cpin_resp = ''
-            for _ in range(4):
-                time.sleep(0.3)
-                r, _, _ = select.select([f], [], [], 0.1)
-                if r:
-                    data = f.read(1024).decode(errors='ignore')
-                    if not data:
-                        raise OSError("EOF")
-                    cpin_resp += data
-                
-            if 'READY' in cpin_resp:
-                cpin_state = 'READY'
-            elif 'SIM PIN' in cpin_resp:
-                cpin_state = 'PIN_LOCKED'
-            elif 'NOT INSERTED' in cpin_resp:
-                cpin_state = 'NO_SIM'
-                
-            # Query network registration status (AT+CREG?)
-            f.write(b'AT+CREG?\\r\\n')
-            resp = ''
-            for _ in range(4):
-                time.sleep(0.3)
-                r, _, _ = select.select([f], [], [], 0.1)
-                if r:
-                    data = f.read(1024).decode(errors='ignore')
-                    if not data:
-                        raise OSError("EOF")
-                    resp += data
-                
-            reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', resp)
-            if reg_match:
-                status = int(reg_match.group(1))
-                if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
-                elif status == 1: creg_state = 'REGISTERED_HOME'
-                elif status == 2: creg_state = 'SEARCHING'
-                elif status == 3: creg_state = 'REGISTRATION_DENIED'
-                elif status == 4: creg_state = 'UNKNOWN'
-                elif status == 5: creg_state = 'REGISTERED_ROAMING'
-                
-                if status in (1, 5):
-                    registered = True
-                    
-            # Query signal strength (AT+CSQ)
-            f.write(b'AT+CSQ\\r\\n')
-            csq_resp = ''
-            for _ in range(4):
-                time.sleep(0.3)
-                r, _, _ = select.select([f], [], [], 0.1)
-                if r:
-                    data = f.read(1024).decode(errors='ignore')
-                    if not data:
-                        raise OSError("EOF")
-                    csq_resp += data
-                
-            for line in csq_resp.split('\\n'):
-                if '+CSQ:' in line:
-                    csq_state = line.split(':')[1].strip()
-                    try:
-                        rssi = int(line.split(':')[1].split(',')[0].strip())
-                    except Exception:
-                        pass
+            resp = b''
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r:
+                resp = f.read(1024)
+                if not resp:
+                    return 'PORT_ERROR (EOF)'
+            return resp.decode(errors='ignore')
     except Exception as e:
-        cpin_state = f'PORT_ERROR ({type(e).__name__})'
+        return f'PORT_ERROR ({type(e).__name__})'
+
+while time.time() - start_time < 150:
+    attempt += 1
+    
+    # 1. Query PIN status
+    cpin_resp = send_cmd(b'AT+CPIN?')
+    cpin_state = 'UNKNOWN'
+    if 'READY' in cpin_resp:
+        cpin_state = 'READY'
+    elif 'SIM PIN' in cpin_resp:
+        cpin_state = 'PIN_LOCKED'
+    elif 'NOT INSERTED' in cpin_resp:
+        cpin_state = 'NO_SIM'
+    elif 'PORT_ERROR' in cpin_resp:
+        cpin_state = cpin_resp
+        
+    time.sleep(1.0)  # Pause to avoid buffer / timing issues
+    
+    # 2. Query network registration status (AT+CREG?)
+    creg_resp = send_cmd(b'AT+CREG?')
+    creg_state = 'UNKNOWN'
+    if 'PORT_ERROR' in creg_resp:
+        creg_state = creg_resp
+    else:
+        reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', creg_resp)
+        if reg_match:
+            status = int(reg_match.group(1))
+            if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
+            elif status == 1: creg_state = 'REGISTERED_HOME'
+            elif status == 2: creg_state = 'SEARCHING'
+            elif status == 3: creg_state = 'REGISTRATION_DENIED'
+            elif status == 4: creg_state = 'UNKNOWN'
+            elif status == 5: creg_state = 'REGISTERED_ROAMING'
+            
+            if status in (1, 5):
+                registered = True
+                
+    time.sleep(1.0)  # Pause to avoid buffer / timing issues
+    
+    # 3. Query signal strength (AT+CSQ)
+    csq_resp = send_cmd(b'AT+CSQ')
+    csq_state = 'UNKNOWN'
+    if 'PORT_ERROR' in csq_resp:
+        csq_state = csq_resp
+    else:
+        for line in csq_resp.split('\\n'):
+            if '+CSQ:' in line:
+                csq_state = line.split(':')[1].strip()
+                try:
+                    rssi = int(line.split(':')[1].split(',')[0].strip())
+                except Exception:
+                    pass
         
     elapsed = int(time.time() - start_time)
-    print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal (RSSI,BER): {csq_state} | Elapsed: {elapsed}s')
+    print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal: {csq_state} | Elapsed: {elapsed}s')
     sys.stdout.flush()
     if registered:
         break
-    time.sleep(4.0)
+    time.sleep(8.0)
 
 if registered:
     print(f'SUCCESS: Registered on network. Signal strength RSSI: {rssi}/31')
