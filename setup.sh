@@ -316,29 +316,10 @@ else:
     echo "Modem control ports (/dev/ttyUSB2 or /dev/ttyUSB3) not found. Skipping AT configuration."
   fi
 
-  # Configure route-metric to prioritize WiFi (higher priority / lower metric) over Cellular (lower priority / higher metric)
-  echo "Setting connection route metrics to prioritize WiFi (metric 100) over Cellular (metric 300)..."
-  sudo nmcli connection modify lte-modem ipv4.route-metric 300 ipv6.route-metric 300 || true
-  sudo nmcli connection modify netplan-eth0 ipv4.route-metric 300 ipv6.route-metric 300 || true
-  
-  # For all active and saved WiFi profiles, set route-metric to 100
-  # Matches newer NetworkManager types like '802-11-wireless' as well as legacy 'wifi'
-  for conn in $(nmcli -g NAME,TYPE connection show | grep :vpn -v | grep -E ":802-11-wireless|:wireless|:wifi" | cut -d: -f1); do
-    echo "Prioritizing WiFi connection: $conn"
-    sudo nmcli connection modify "$conn" ipv4.route-metric 100 ipv6.route-metric 100 || true
-  done
-  sudo nmcli connection reload || true
-  
-  # Restart NetworkManager connections / reapply configurations to apply the new metrics immediately
-  echo "Applying route metrics changes..."
-  if [ -n "$IFACE" ]; then
-    echo "Reapplying settings to cellular interface '$IFACE'..."
-    sudo nmcli device reapply "$IFACE" 2>/dev/null || sudo nmcli connection up netplan-eth0 2>/dev/null || true
-  fi
-  for dev in $(nmcli -t -f DEVICE,TYPE device | grep ":wifi" | cut -d: -f1); do
-    echo "Reapplying settings to WiFi interface '$dev'..."
-    sudo nmcli device reapply "$dev" 2>/dev/null || true
-  done
+  # Add NetworkManager GSM connection configuration for standard dial fallback
+  echo "Adding cellular connection profile in NetworkManager..."
+  sudo nmcli connection delete lte-modem 2>/dev/null || true
+  sudo nmcli connection add type gsm ifname '*' con-name lte-modem apn "$APN_NAME" || true
 else
   echo "Quectel modem not found on USB. Ensure it is connected and powered."
 fi

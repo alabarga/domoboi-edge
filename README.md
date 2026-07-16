@@ -195,13 +195,19 @@ ip addr show usb0  # replace 'usb0' with the interface name from nmcli
 ```
 
 ### Network Priority (WiFi vs. Cellular Backup)
-To prevent generating high cellular billing charges when local WiFi is available, the system prioritizes connection routes by adjusting the NetworkManager routing metric (lower metric = higher priority):
+To prevent generating high cellular billing charges when local WiFi is available, we provide a standalone script `net.sh` that prioritizes connection routes by adjusting the NetworkManager routing metric (lower metric = higher priority):
 * **WiFi Connections**: Metric set to `100` (preferred route).
 * **Cellular Modem Connection (`usb0`/`lte-modem`)**: Metric set to `300` (failover backup route).
 
 All internet traffic will be routed over WiFi by default. If WiFi drops out, the system automatically switches to the cellular connection without interruption, and reverts to WiFi immediately once coverage is restored.
 
-To view your current routing priorities, execute:
+To apply this routing priority, make the script executable and run it as root:
+```bash
+chmod +x net.sh
+sudo ./net.sh
+```
+
+To view your current routing priorities:
 ```bash
 ip route show
 # Look for 'metric <value>' in the default routes:
