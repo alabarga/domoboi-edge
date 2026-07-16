@@ -229,39 +229,49 @@ except Exception:
     
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
     echo "Waiting for cellular modem to boot, register, and establish a data connection..."
+    echo "Waiting for modem port to disconnect..."
+    for i in {1..10}; do
+      if [ ! -e "$MODEM_PORT" ]; then
+        break
+      fi
+      sleep 1
+    done
     while [ ! -e "$MODEM_PORT" ]; do
       echo "⏳  Waiting for $MODEM_PORT to appear..."
       sleep 1
     done
     echo "✅  $MODEM_PORT is now present"
-    sleep 5
+    sleep 2
     if python3 - "$MODEM_PORT" <<'PY'
-import time, sys, re, select, termios, os
+import time, sys, re, select
 port = sys.argv[1]
 start_time = time.time()
 registered = False
 rssi = 99
 attempt = 0
 
-def send_cmd(cmd, wait=1.0):
-    fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
-    # Ensure DTR/RTS are asserted (CLOCAL + CRTSCTS)
-    attrs = termios.tcgetattr(fd)
-    attrs[2] |= termios.CLOCAL | termios.CRTSCTS
-    termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    termios.tcflush(fd, termios.TCIOFLUSH)
-    os.write(fd, cmd + b'\r\n')
-    time.sleep(wait)
-    r, _, _ = select.select([fd], [], [], 0.5)
-    resp = b""
-    if r:
-        resp = os.read(fd, 1024)
-    os.close(fd)
-    return resp.decode(errors='ignore')
+def send_cmd(cmd, wait=0.5):
+    try:
+        with open(port, 'r+b', buffering=0) as f:
+            # Clean buffers by reading outstanding data
+            r, _, _ = select.select([f], [], [], 0.05)
+            if r:
+                f.read(1024)
+            # Write command
+            f.write(cmd + b'\r\n')
+            # Read response
+            resp = b""
+            for _ in range(4):
+                time.sleep(wait / 4.0)
+                r, _, _ = select.select([f], [], [], 0.05)
+                if r:
+                    resp += f.read(1024)
+            return resp.decode(errors='ignore')
+    except Exception:
+        return ""
 
 while time.time() - start_time < 150:
     attempt += 1
-    # 1. SIM status
     cpin_resp = send_cmd(b'AT+CPIN?')
     cpin_state = 'UNKNOWN'
     if 'READY' in cpin_resp:
@@ -270,7 +280,7 @@ while time.time() - start_time < 150:
         cpin_state = 'PIN_LOCKED'
     elif 'NOT INSERTED' in cpin_resp:
         cpin_state = 'NO_SIM'
-    # 2. Network registration
+
     creg_resp = send_cmd(b'AT+CREG?')
     creg_state = 'UNKNOWN'
     reg_match = re.search(r'\+CREG:\s*(?:\d\s*,\s*)?([0-9])', creg_resp)
@@ -284,7 +294,7 @@ while time.time() - start_time < 150:
         elif status == 5: creg_state = 'REGISTERED_ROAMING'
         if status in (1, 5):
             registered = True
-    # 3. Signal strength
+
     csq_resp = send_cmd(b'AT+CSQ')
     csq_state = 'UNKNOWN'
     for line in csq_resp.split('\n'):
@@ -294,6 +304,7 @@ while time.time() - start_time < 150:
                 rssi = int(line.split(':')[1].split(',')[0].strip())
             except Exception:
                 pass
+
     elapsed = int(time.time() - start_time)
     print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal: {csq_state} | Elapsed: {elapsed}s')
     sys.stdout.flush()
