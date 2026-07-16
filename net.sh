@@ -38,9 +38,12 @@ try:
         r, _, _ = select.select([f], [], [], 0.05)
         if r: f.read(1024)
         f.write(b'AT\\r\\n')
-        time.sleep(0.2)
-        r, _, _ = select.select([f], [], [], 0.1)
-        if r and b'OK' in f.read(1024):
+        resp = b''
+        for _ in range(4):
+            time.sleep(0.15)
+            r, _, _ = select.select([f], [], [], 0.05)
+            if r: resp += f.read(1024)
+        if b'OK' in resp:
             sys.exit(0)
 except Exception:
     pass
@@ -66,6 +69,10 @@ sys.exit(1)
   fi
   
   if [ -n "$MODEM_PORT" ]; then
+    # Configure the modem serial port to RAW mode to disable OS Echo and translations
+    echo "Configuring serial port parameters for $MODEM_PORT..."
+    sudo stty -F "$MODEM_PORT" 115200 raw -echo -echoe -echok -echoctl -echoprt 2>/dev/null || true
+
     echo "Reading modem configuration from config.yaml..."
     
     # Helper to parse YAML values from config.yaml, ignoring inline comments
@@ -88,15 +95,13 @@ sys.exit(1)
     while true; do
       echo "Checking SIM card status..."
       SIM_STATUS=$(python3 -c "
-import time, sys, select
+import time, sys, select, termios
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        # Non-blocking drain
-        r, _, _ = select.select([f], [], [], 0.1)
-        if r:
-            try: f.read(1024)
-            except Exception: pass
+        # Flush termios serial buffers to clear any garbage characters
+        try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
+        except Exception: pass
             
         f.write(b'AT+CPIN?\\r\\n')
         resp = ''
@@ -144,12 +149,13 @@ except Exception:
           # Verify unlock status
           echo "Verifying unlock status..."
           SIM_STATUS=$(python3 -c "
-import time, sys, select
+import time, sys, select, termios
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        r, _, _ = select.select([f], [], [], 0.1)
-        if r: f.read(1024)
+        # Flush termios serial buffers to clear any garbage characters
+        try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
+        except Exception: pass
         f.write(b'AT+CPIN?\\r\\n')
         resp = ''
         for _ in range(4):
@@ -219,68 +225,82 @@ except Exception:
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
     echo "Waiting for cellular modem to boot, register, and establish a data connection..."
     if python3 -c "
-import time, sys, re, select
+import time, sys, re, select, termios
 port = sys.argv[1]
 start_time = time.time()
 registered = False
 rssi = 99
 attempt = 0
+f = None
 while time.time() - start_time < 150:
     attempt += 1
     cpin_state = 'UNKNOWN'
     creg_state = 'UNKNOWN'
     csq_state = 'UNKNOWN'
     try:
-        with open(port, 'r+b', buffering=0) as f:
-            # Non-blocking drain: check if there is data to read before calling read
+        if f is None:
+            f = open(port, 'r+b', buffering=0)
+            # Flush termios serial buffers to clear any garbage characters on open
+            try: termios.tcflush(f.fileno(), termios.TCIOFLUSH)
+            except Exception: pass
+            
+        # Query PIN status
+        f.write(b'AT+CPIN?\\r\\n')
+        cpin_resp = ''
+        for _ in range(4):
+            time.sleep(0.3)
             r, _, _ = select.select([f], [], [], 0.1)
-            if r:
+            if r: cpin_resp += f.read(1024).decode(errors='ignore')
+            
+        if 'READY' in cpin_resp:
+            cpin_state = 'READY'
+        elif 'SIM PIN' in cpin_resp:
+            cpin_state = 'PIN_LOCKED'
+        elif 'NOT INSERTED' in cpin_resp:
+            cpin_state = 'NO_SIM'
+            
+        # Query network registration status (AT+CREG?)
+        f.write(b'AT+CREG?\\r\\n')
+        resp = ''
+        for _ in range(4):
+            time.sleep(0.3)
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r: resp += f.read(1024).decode(errors='ignore')
+            
+        reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', resp)
+        if reg_match:
+            status = int(reg_match.group(1))
+            if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
+            elif status == 1: creg_state = 'REGISTERED_HOME'
+            elif status == 2: creg_state = 'SEARCHING'
+            elif status == 3: creg_state = 'REGISTRATION_DENIED'
+            elif status == 4: creg_state = 'UNKNOWN'
+            elif status == 5: creg_state = 'REGISTERED_ROAMING'
+            
+            if status in (1, 5):
+                registered = True
+                
+        # Query signal strength (AT+CSQ)
+        f.write(b'AT+CSQ\\r\\n')
+        csq_resp = ''
+        for _ in range(4):
+            time.sleep(0.3)
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r: csq_resp += f.read(1024).decode(errors='ignore')
+            
+        for line in csq_resp.split('\\n'):
+            if '+CSQ:' in line:
+                csq_state = line.split(':')[1].strip()
                 try:
-                    f.read(2048)
+                    rssi = int(line.split(':')[1].split(',')[0].strip())
                 except Exception:
                     pass
-                
-            # Query PIN status
-            f.write(b'AT+CPIN?\\r\\n')
-            time.sleep(0.3)
-            cpin_resp = f.read(1024).decode(errors='ignore')
-            if 'READY' in cpin_resp:
-                cpin_state = 'READY'
-            elif 'SIM PIN' in cpin_resp:
-                cpin_state = 'PIN_LOCKED'
-            elif 'NOT INSERTED' in cpin_resp:
-                cpin_state = 'NO_SIM'
-                
-            # Query network registration status (AT+CREG?)
-            f.write(b'AT+CREG?\\r\\n')
-            time.sleep(0.3)
-            resp = f.read(1024).decode(errors='ignore')
-            reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', resp)
-            if reg_match:
-                status = int(reg_match.group(1))
-                if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
-                elif status == 1: creg_state = 'REGISTERED_HOME'
-                elif status == 2: creg_state = 'SEARCHING'
-                elif status == 3: creg_state = 'REGISTRATION_DENIED'
-                elif status == 4: creg_state = 'UNKNOWN'
-                elif status == 5: creg_state = 'REGISTERED_ROAMING'
-                
-                if status in (1, 5):
-                    registered = True
-                    
-            # Query signal strength (AT+CSQ)
-            f.write(b'AT+CSQ\\r\\n')
-            time.sleep(0.3)
-            csq_resp = f.read(1024).decode(errors='ignore')
-            for line in csq_resp.split('\\n'):
-                if '+CSQ:' in line:
-                    csq_state = line.split(':')[1].strip()
-                    try:
-                        rssi = int(line.split(':')[1].split(',')[0].strip())
-                    except Exception:
-                        pass
     except Exception as e:
         cpin_state = f'PORT_ERROR ({type(e).__name__})'
+        if f is not None:
+            try: f.close()
+            except Exception: pass
+            f = None
         
     elapsed = int(time.time() - start_time)
     print(f'  [Attempt {attempt}] SIM: {cpin_state} | Net: {creg_state} | Signal (RSSI,BER): {csq_state} | Elapsed: {elapsed}s')
@@ -288,6 +308,10 @@ while time.time() - start_time < 150:
     if registered:
         break
     time.sleep(4.0)
+
+if f is not None:
+    try: f.close()
+    except Exception: pass
 
 if registered:
     print(f'SUCCESS: Registered on network. Signal strength RSSI: {rssi}/31')
