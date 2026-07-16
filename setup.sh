@@ -134,6 +134,13 @@ import time, sys
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
+        # Drain any pending unsolicited messages/SMS alerts from the buffer
+        time.sleep(0.1)
+        try:
+            f.read(2048)
+        except Exception:
+            pass
+            
         f.write(b'AT+CPIN?\\r\\n')
         time.sleep(0.4)
         resp = f.read(1024).decode(errors='ignore')
