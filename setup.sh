@@ -130,16 +130,17 @@ if lsusb | grep -qi "quectel"; then
     while true; do
       echo "Checking SIM card status..."
       SIM_STATUS=$(python3 -c "
-import time, sys
+import time, sys, select
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        # Drain any pending unsolicited messages/SMS alerts from the buffer
-        time.sleep(0.1)
-        try:
-            f.read(2048)
-        except Exception:
-            pass
+        # Non-blocking drain: check if there is data to read before calling read
+        r, _, _ = select.select([f], [], [], 0.1)
+        if r:
+            try:
+                f.read(2048)
+            except Exception:
+                pass
             
         f.write(b'AT+CPIN?\\r\\n')
         time.sleep(0.4)
@@ -223,7 +224,7 @@ except Exception:
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
     echo "Waiting for cellular modem to boot, register, and establish a data connection..."
     if python3 -c "
-import time, sys, re
+import time, sys, re, select
 port = sys.argv[1]
 start_time = time.time()
 registered = False
@@ -236,12 +237,13 @@ while time.time() - start_time < 150:
     csq_state = 'UNKNOWN'
     try:
         with open(port, 'r+b', buffering=0) as f:
-            # Drain any pending unsolicited messages/SMS alerts from the buffer
-            time.sleep(0.1)
-            try:
-                f.read(2048)
-            except Exception:
-                pass
+            # Non-blocking drain: check if there is data to read before calling read
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r:
+                try:
+                    f.read(2048)
+                except Exception:
+                    pass
                 
             # Query PIN status
             f.write(b'AT+CPIN?\\r\\n')
