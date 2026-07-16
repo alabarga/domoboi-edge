@@ -53,8 +53,8 @@ buffer:
   sync_interval_sec: 30
 
 # Cellular Modem Configuration
+# Cellular Modem Configuration
 modem:
-  pin: ""                 # SIM card PIN (leave empty if PIN is disabled)
-  apn: "internet"         # Cellular APN (e.g. orangeworld, internet)
-  username: ""            # APN Username (leave empty if not required)
-  password: ""            # APN Password (leave empty if not required)
+  apn: "orangeworld"
+  username: "orange"
+  password: "orange"

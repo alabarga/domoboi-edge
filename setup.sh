@@ -110,11 +110,11 @@ if lsusb | grep -qi "quectel"; then
   if [ -n "$MODEM_PORT" ]; then
     echo "Reading modem configuration from config.yaml..."
     
-    # Helper to parse YAML values from config.yaml
+    # Helper to parse YAML values from config.yaml, ignoring inline comments
     get_yaml_val() {
       local key=$1
       if [ -f "$CONFIG_PATH" ]; then
-        grep -E "^[[:space:]]*$key:" "$CONFIG_PATH" | head -n1 | sed -E 's/.*:[[:space:]]*"?(.*)"?/\1/' | sed 's/"//g' | sed "s/'//g" | sed 's/[[:space:]]*$//'
+        grep -E "^[[:space:]]*$key:" "$CONFIG_PATH" | head -n1 | cut -d '#' -f1 | sed -E 's/.*:[[:space:]]*"?(.*)"?/\1/' | sed 's/"//g' | sed "s/'//g" | sed 's/[[:space:]]*$//'
       fi
     }
     
@@ -127,13 +127,22 @@ if lsusb | grep -qi "quectel"; then
       APN_NAME="internet"
     fi
     
-    echo "Sending configuration commands to modem ($MODEM_PORT)..."
+    echo "Checking SIM PIN lock status..."
+    CPIN_STATUS=$(python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CPIN?\r\n'); time.sleep(0.4); print(f.read(1024).decode(errors='ignore'))" 2>/dev/null || true)
     
-    # Check PIN status
-    if [ -n "$SIM_PIN" ]; then
-      echo "Disabling SIM PIN lock using PIN from config..."
-      python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
-      sleep 1
+    if echo "$CPIN_STATUS" | grep -q "+CPIN: READY"; then
+      echo "SIM is already unlocked/READY. Skipping PIN disable step."
+    else
+      # Prompt for SIM PIN if not defined in config and running interactively
+      if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
+        read -p "Enter your SIM card PIN (or press Enter to skip if no PIN): " -r SIM_PIN
+      fi
+      
+      if [ -n "$SIM_PIN" ]; then
+        echo "Disabling SIM PIN lock..."
+        python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
+        sleep 1
+      fi
     fi
     
     # Configure APN in profile 1
