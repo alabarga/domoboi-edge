@@ -26,12 +26,43 @@ echo "--> Detecting Quectel Cellular Modem..."
 if lsusb | grep -qi "quectel"; then
   echo "Quectel modem detected via USB."
   
-  # Select the correct serial port (typically ttyUSB2 or ttyUSB3)
+  # Select the correct serial port by testing which one actively responds to AT commands
   MODEM_PORT=""
-  if [ -e /dev/ttyUSB2 ]; then
-    MODEM_PORT="/dev/ttyUSB2"
-  elif [ -e /dev/ttyUSB3 ]; then
-    MODEM_PORT="/dev/ttyUSB3"
+  echo "Scanning serial ports for AT command response..."
+  for port in /dev/ttyUSB3 /dev/ttyUSB2 /dev/ttyUSB1; do
+    if [ -e "$port" ]; then
+      if python3 -c "
+import time, sys, select
+try:
+    with open(sys.argv[1], 'r+b', buffering=0) as f:
+        r, _, _ = select.select([f], [], [], 0.05)
+        if r: f.read(1024)
+        f.write(b'AT\\r\\n')
+        time.sleep(0.2)
+        r, _, _ = select.select([f], [], [], 0.1)
+        if r and b'OK' in f.read(1024):
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" "$port" 2>/dev/null; then
+        MODEM_PORT="$port"
+        echo "Selected active modem control port: $MODEM_PORT"
+        break
+      fi
+    fi
+  done
+  
+  if [ -z "$MODEM_PORT" ]; then
+    # Fallback to checking file existence if none responded (modem might be sleeping)
+    if [ -e /dev/ttyUSB3 ]; then
+      MODEM_PORT="/dev/ttyUSB3"
+    elif [ -e /dev/ttyUSB2 ]; then
+      MODEM_PORT="/dev/ttyUSB2"
+    fi
+    if [ -n "$MODEM_PORT" ]; then
+      echo "No ports responded to AT. Using fallback file detection: $MODEM_PORT"
+    fi
   fi
   
   if [ -n "$MODEM_PORT" ]; then
