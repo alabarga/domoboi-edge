@@ -234,6 +234,7 @@ except Exception:
       sleep 1
     done
     echo "✅  $MODEM_PORT is now present"
+    sleep 5
     if python3 - "$MODEM_PORT" <<'PY'
 import time, sys, re, select, termios, os
 port = sys.argv[1]
