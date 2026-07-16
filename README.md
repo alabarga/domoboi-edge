@@ -42,7 +42,7 @@ sudo apt install git
 ```
 git clone https://github.com/alabarga/domoboi-edge.git 
 cd domoboi-edge 
-sudo ./setup.sh
+
 ```
 
 - CHeck active connections
