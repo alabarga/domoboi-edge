@@ -233,9 +233,8 @@ except Exception:
       echo "⏳  Waiting for $MODEM_PORT to appear..."
       sleep 1
     done
-    echo "✅  $MODEM_PORT is now present."
-
-    if python3 - <<'PY' "$MODEM_PORT"
+    echo "✅  $MODEM_PORT is now present"
+    if python3 - "$MODEM_PORT" <<'PY'
 import time, sys, re, select, termios, os
 port = sys.argv[1]
 start_time = time.time()
@@ -273,7 +272,7 @@ while time.time() - start_time < 150:
     # 2. Network registration
     creg_resp = send_cmd(b'AT+CREG?')
     creg_state = 'UNKNOWN'
-    reg_match = re.search(r'\\+CREG:\\s*(?:\\d\\s*,\\s*)?([0-9])', creg_resp)
+    reg_match = re.search(r'\+CREG:\s*(?:\d\s*,\s*)?([0-9])', creg_resp)
     if reg_match:
         status = int(reg_match.group(1))
         if status == 0: creg_state = 'NOT_REG_NOT_SEARCHING'
@@ -307,7 +306,8 @@ if registered:
 else:
     print('TIMEOUT: Modem failed to register within 150 seconds.')
     sys.exit(1)
-PY; then
+PY
+then
       # Wait a brief moment for interface allocation and DHCP lease
       echo "Waiting 5 seconds for IP address assignment..."
       sleep 5
