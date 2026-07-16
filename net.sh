@@ -13,6 +13,11 @@ echo "========================================="
 echo " Starting Cellular Modem & Network Setup "
 echo "========================================="
 
+# Stop conflicting services that poll the serial port to prevent read collisions
+echo "Stopping conflicting services (domoboi-edge, ModemManager)..."
+sudo systemctl stop domoboi-edge 2>/dev/null || true
+sudo systemctl stop ModemManager 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="$SCRIPT_DIR/config.yaml"
 
@@ -377,5 +382,6 @@ for dev in $(nmcli -t -f DEVICE,TYPE device | grep ":wifi" | cut -d: -f1); do
 done
 
 echo "Network metrics configuration complete."
+
 echo "Active Routing Table (ip route show):"
 ip route show

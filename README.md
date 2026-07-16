@@ -84,7 +84,7 @@ cp config.example.yaml config.yaml
 nano config.yaml
 
 # 3. Run the system setup script
-chmod +x setup.sh net.sh
+chmod +x setup.sh net.sh start.sh
 sudo ./setup.sh
 
 # 4. REBOOT the Raspberry Pi 5 to apply the USB current overrides!
@@ -92,6 +92,9 @@ sudo reboot
 
 # 5. After reboot, configure the modem and network priorities
 sudo ./net.sh
+
+# 6. Start the energy monitoring service
+sudo ./start.sh
 ```
 
 ### USB Current Override
