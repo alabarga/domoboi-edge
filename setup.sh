@@ -134,17 +134,21 @@ import time, sys, select
 port = sys.argv[1]
 try:
     with open(port, 'r+b', buffering=0) as f:
-        # Non-blocking drain: check if there is data to read before calling read
+        # Non-blocking drain
         r, _, _ = select.select([f], [], [], 0.1)
         if r:
-            try:
-                f.read(2048)
-            except Exception:
-                pass
+            try: f.read(1024)
+            except Exception: pass
             
         f.write(b'AT+CPIN?\\r\\n')
-        time.sleep(0.4)
-        resp = f.read(1024).decode(errors='ignore')
+        resp = ''
+        # Read multiple times over 1.2 seconds to capture the full response
+        for _ in range(4):
+            time.sleep(0.3)
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r:
+                resp += f.read(1024).decode(errors='ignore')
+        
         if 'READY' in resp:
             print('READY')
             sys.exit(0)
@@ -167,19 +171,52 @@ except Exception:
       if [ "$SIM_STATUS" = "READY" ]; then
         echo "SIM is already unlocked/READY. Skipping PIN disable step."
         break
-      elif [ "$SIM_STATUS" = "LOCKED" ]; then
-        # Prompt for SIM PIN if not defined in config and running interactively
+      else
+        # If status is NOT READY (LOCKED, UNKNOWN, PORT_ERROR, etc.)
+        # We ask for the PIN if not already defined in config and running interactively
         if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
-          read -p "SIM is PIN locked. Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
+          read -p "SIM is not READY (Status: $SIM_STATUS). Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
         fi
         
         if [ -n "$SIM_PIN" ]; then
-          echo "Disabling SIM PIN lock..."
+          echo "Disabling SIM PIN lock using PIN..."
           python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
           sleep 1
+          
+          # Verify unlock status
+          echo "Verifying unlock status..."
+          SIM_STATUS=$(python3 -c "
+import time, sys, select
+port = sys.argv[1]
+try:
+    with open(port, 'r+b', buffering=0) as f:
+        r, _, _ = select.select([f], [], [], 0.1)
+        if r: f.read(1024)
+        f.write(b'AT+CPIN?\\r\\n')
+        resp = ''
+        for _ in range(4):
+            time.sleep(0.3)
+            r, _, _ = select.select([f], [], [], 0.1)
+            if r:
+                resp += f.read(1024).decode(errors='ignore')
+        if 'READY' in resp:
+            print('READY')
+            sys.exit(0)
+        else:
+            print('LOCKED')
+            sys.exit(1)
+except Exception:
+    print('PORT_ERROR')
+    sys.exit(2)
+" "$MODEM_PORT" || true)
+          
+          if [ "$SIM_STATUS" = "READY" ]; then
+            echo "SIM successfully unlocked!"
+            break
+          fi
         fi
-        break
-      else
+        
+        # If still not ready, show warning and retry/skip menu
         if [ -t 0 ]; then
           echo "------------------------------------------------------------------"
           echo "WARNING: SIM card is not ready (Status: $SIM_STATUS)."
