@@ -210,7 +210,7 @@ except Exception:
     sleep 1
     
     echo "Rebooting cellular modem to apply changes..."
-    python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CFUN=1,1\r\n'); time.sleep(0.5); f.read(1024)" || true
+    python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CFUN=1,1\r\n'); time.sleep(0.5); f.read(1024)" 2>/dev/null || true
     echo "ECM mode configured. Modem is rebooting."
     
     # Wait for the modem to reboot, attach to the network, and obtain DHCP
