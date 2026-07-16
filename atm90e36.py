@@ -102,6 +102,7 @@ class ATM90E36:
         self.igain_a = cal.get("igain_a", 33500)
         self.igain_b = cal.get("igain_b", 33500)
         self.igain_c = cal.get("igain_c", 33500)
+        self.i_multiplier = cal.get("current_multiplier", 1.0)
 
     def _pca_write(self, value):
         """Write 16-bit word to PCA9671 expander."""
@@ -258,21 +259,21 @@ class ATM90E36:
 
     def get_current(self, phase="A"):
         reg = REG_IRMS_A if phase == "A" else (REG_IRMS_B if phase == "B" else REG_IRMS_C)
-        return self.read_reg(reg) * 0.001
-
+        return self.read_reg(reg) * 0.001 * self.i_multiplier
+ 
     def get_active_power(self, phase="A"):
         reg = REG_PMEAN_A if phase == "A" else (REG_PMEAN_B if phase == "B" else REG_PMEAN_C)
         val = self.read_reg(reg)
         if val & 0x8000:
             val -= 0x10000
-        return float(val)
-
+        return float(val) * self.i_multiplier
+ 
     def get_reactive_power(self, phase="A"):
         reg = REG_QMEAN_A if phase == "A" else (REG_QMEAN_B if phase == "B" else REG_QMEAN_C)
         val = self.read_reg(reg)
         if val & 0x8000:
             val -= 0x10000
-        return float(val)
+        return float(val) * self.i_multiplier
 
     def get_power_factor(self, phase="A"):
         reg = REG_PF_MEAN_A if phase == "A" else (REG_PF_MEAN_B if phase == "B" else REG_PF_MEAN_C)

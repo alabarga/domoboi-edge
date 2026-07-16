@@ -13,6 +13,8 @@ echo "========================================="
 echo " Starting Domoboi NILM System Setup      "
 echo "========================================="
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # 1. Enable SPI & I2C Interfaces
 echo "--> Configuring SPI and I2C interfaces..."
 CONFIG_FILE="/boot/firmware/config.txt"
@@ -81,41 +83,148 @@ apt-get install -y \
   cmake \
   libgpiod-dev
 
+# 2b. Ensure config.yaml exists
+CONFIG_PATH="$SCRIPT_DIR/config.yaml"
+if [ ! -f "$CONFIG_PATH" ]; then
+  if [ -f "$SCRIPT_DIR/config.example.yaml" ]; then
+    cp "$SCRIPT_DIR/config.example.yaml" "$CONFIG_PATH"
+    echo "Created default config.yaml from config.example.yaml."
+  else
+    echo "Warning: config.example.yaml not found. Skipping config.yaml creation."
+  fi
+fi
+
 # 3. Configure Quectel Modem (ECM Mode & APN Setup)
 echo "--> Detecting Quectel Cellular Modem..."
 if lsusb | grep -qi "quectel"; then
   echo "Quectel modem detected via USB."
   
-  # Set modem to ECM Mode (usbnet 1) via serial AT command
-  # ECM mode exposes a direct ethernet interface (usb0/eth1) which uses dhcp
-  # Typically the command port is /dev/ttyUSB2
+  # Select the correct serial port (typically ttyUSB2 or ttyUSB3)
+  MODEM_PORT=""
   if [ -e /dev/ttyUSB2 ]; then
-    echo "Sending configuration commands to modem (/dev/ttyUSB2)..."
-    stty -F /dev/ttyUSB2 115200 || true
+    MODEM_PORT="/dev/ttyUSB2"
+  elif [ -e /dev/ttyUSB3 ]; then
+    MODEM_PORT="/dev/ttyUSB3"
+  fi
+  
+  if [ -n "$MODEM_PORT" ]; then
+    echo "Reading modem configuration from config.yaml..."
     
-    # Prompt for SIM PIN if standard input is a terminal (interactive)
-    if [ -t 0 ]; then
-      read -p "Enter your SIM card PIN (or press Enter to skip if no PIN): " -r SIM_PIN
-      if [ -n "$SIM_PIN" ]; then
-        echo "Disabling SIM PIN lock..."
-        echo -e "AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r" > /dev/ttyUSB2
-        sleep 1
+    # Helper to parse YAML values from config.yaml
+    get_yaml_val() {
+      local key=$1
+      if [ -f "$CONFIG_PATH" ]; then
+        grep -E "^[[:space:]]*$key:" "$CONFIG_PATH" | head -n1 | sed -E 's/.*:[[:space:]]*"?(.*)"?/\1/' | sed 's/"//g' | sed "s/'//g" | sed 's/[[:space:]]*$//'
       fi
+    }
+    
+    SIM_PIN=$(get_yaml_val "pin")
+    APN_NAME=$(get_yaml_val "apn")
+    APN_USER=$(get_yaml_val "username")
+    APN_PASS=$(get_yaml_val "password")
+    
+    if [ -z "$APN_NAME" ]; then
+      APN_NAME="internet"
+    fi
+    
+    echo "Sending configuration commands to modem ($MODEM_PORT)..."
+    
+    # Check PIN status
+    if [ -n "$SIM_PIN" ]; then
+      echo "Disabling SIM PIN lock using PIN from config..."
+      python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
+      sleep 1
+    fi
+    
+    # Configure APN in profile 1
+    echo "Configuring modem APN to '$APN_NAME'..."
+    python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CGDCONT=1,\"IP\",\"$APN_NAME\"\r\n'); time.sleep(0.5); f.read(1024)" || true
+    sleep 1
+    
+    # Configure PAP authentication if credentials are provided
+    if [ -n "$APN_USER" ] && [ -n "$APN_PASS" ]; then
+      echo "Configuring APN PAP credentials..."
+      python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+QICSGP=1,1,\"$APN_NAME\",\"$APN_USER\",\"$APN_PASS\",1\r\n'); time.sleep(0.5); f.read(1024)" || true
+      sleep 1
     fi
     
     # AT+QCFG="usbnet",1 sets to ECM mode. AT+CFUN=1,1 reboots the modem.
-    echo -e 'AT+QCFG="usbnet",1\r' > /dev/ttyUSB2
+    echo "Configuring modem to ECM mode..."
+    python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+QCFG=\"usbnet\",1\r\n'); time.sleep(0.5); f.read(1024)" || true
     sleep 1
-    echo -e 'AT+CFUN=1,1\r' > /dev/ttyUSB2
+    
+    echo "Rebooting cellular modem to apply changes..."
+    python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CFUN=1,1\r\n'); time.sleep(0.5); f.read(1024)" || true
     echo "ECM mode configured. Modem is rebooting."
+    
+    # Wait for the modem to reboot, attach to the network, and obtain DHCP
+    echo "Waiting for cellular modem to boot, register, and establish a data connection..."
+    if python3 -c "
+import time, sys
+port = sys.argv[1]
+start_time = time.time()
+registered = False
+rssi = 99
+while time.time() - start_time < 90:
+    try:
+        with open(port, 'r+b', buffering=0) as f:
+            # Query network registration status (AT+CREG?)
+            f.write(b'AT+CREG?\\r\\n')
+            time.sleep(0.4)
+            resp = f.read(1024).decode(errors='ignore')
+            if '+CREG: 0,1' in resp or '+CREG: 0,5' in resp:
+                registered = True
+                
+                # Query signal strength (AT+CSQ)
+                f.write(b'AT+CSQ\\r\\n')
+                time.sleep(0.4)
+                csq_resp = f.read(1024).decode(errors='ignore')
+                for line in csq_resp.split('\\n'):
+                    if '+CSQ:' in line:
+                        try:
+                            rssi = int(line.split(':')[1].split(',')[0].strip())
+                        except Exception:
+                            pass
+                break
+    except Exception:
+        pass
+    time.sleep(4.0)
+
+if registered:
+    print(f'SUCCESS: Registered on network. Signal strength RSSI: {rssi}/31')
+    sys.exit(0)
+else:
+    print('TIMEOUT: Modem failed to register within 90 seconds.')
+    sys.exit(1)
+" "$MODEM_PORT"; then
+      # Wait a brief moment for interface allocation and DHCP lease
+      echo "Waiting 5 seconds for IP address assignment..."
+      sleep 5
+      
+      # Auto-detect the active interface corresponding to the modem (usb0, enp, enx)
+      IFACE=$(nmcli -t -f DEVICE,TYPE device | grep -E "usb0|enp|enx" | head -n1 | cut -d: -f1)
+      if [ -z "$IFACE" ]; then
+        # Fallback to any active ethernet connection
+        IFACE=$(nmcli -t -f DEVICE,TYPE device | grep -E ":ethernet" | head -n1 | cut -d: -f1)
+      fi
+      
+      if [ -n "$IFACE" ]; then
+        echo "Cellular network interface '$IFACE' detected. Performing Google ping test..."
+        ping -I "$IFACE" -c 4 google.com || true
+      else
+        echo "Warning: Could not identify cellular network interface name for ping test."
+      fi
+    else
+      echo "Warning: Registration check failed. Skipping ping test."
+    fi
   else
-    echo "Modem AT port (/dev/ttyUSB2) not found. Skipping AT command configuration."
+    echo "Modem control ports (/dev/ttyUSB2 or /dev/ttyUSB3) not found. Skipping AT configuration."
   fi
 
   # Add NetworkManager GSM connection configuration for standard dial fallback
   echo "Adding cellular connection profile in NetworkManager..."
   nmcli connection delete lte-modem 2>/dev/null || true
-  nmcli connection add type gsm ifname '*' con-name lte-modem apn internet || true
+  nmcli connection add type gsm ifname '*' con-name lte-modem apn "$APN_NAME" || true
 else
   echo "Quectel modem not found on USB. Ensure it is connected and powered."
 fi
@@ -134,6 +243,13 @@ if [ -d "$SCRIPT_DIR/testctread" ]; then
 else
   echo "Warning: testctread directory not found."
 fi
+
+# 4b. Ensure config.yaml permissions are correct
+echo "--> Configuring config.yaml permissions..."
+if [ -n "$SUDO_USER" ] && [ -f "$CONFIG_PATH" ]; then
+  chown "$SUDO_USER":"$SUDO_USER" "$CONFIG_PATH" 2>/dev/null || true
+fi
+
 
 # 5. Create Python Virtual Environment & Install requirements
 echo "--> Creating Python virtual environment..."

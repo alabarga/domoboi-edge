@@ -29,7 +29,8 @@ i2c:
 # Calibration Coefficients (Adjust these during calibration)
 calibration:
   ugain: 20200            # Voltage gain
-  igain_a: 33500          # Current gain for Channel A (CT1)
+  igain_a: 65535          # Current gain for Channel A (CT1)
+  current_multiplier: 2.2 # Software current multiplier to scale readings beyond 16-bit register limits
   igain_b: 0              # Current gain for Channel B (CT2) - set to 0 if unused
   igain_c: 0              # Current gain for Channel C (CT3) - set to 0 if unused
 
@@ -50,3 +51,10 @@ api:
 buffer:
   db_path: "data/offline_events.db"
   sync_interval_sec: 30
+
+# Cellular Modem Configuration
+modem:
+  pin: ""                 # SIM card PIN (leave empty if PIN is disabled)
+  apn: "internet"         # Cellular APN (e.g. orangeworld, internet)
+  username: ""            # APN Username (leave empty if not required)
+  password: ""            # APN Password (leave empty if not required)
