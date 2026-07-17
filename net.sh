@@ -350,9 +350,31 @@ fi
 
 # 2. Configure connection metrics to prioritize WiFi (metric 100) over Cellular (metric 300)
 echo "Setting connection route metrics to prioritize WiFi (metric 100) over Cellular (metric 300)..."
-sudo nmcli connection modify lte-modem ipv4.route-metric 300 ipv6.route-metric 300 || true
-sudo nmcli connection modify netplan-eth0 ipv4.route-metric 300 ipv6.route-metric 300 || true
 
+# Dynamically find the active connection name for the cellular interface (e.g. usb0)
+CELL_CONN=""
+if [ -n "$IFACE" ]; then
+  CELL_CONN=$(nmcli -t -f DEVICE,NAME connection show --active | grep -E "^${IFACE}:" | head -n1 | cut -d: -f2)
+fi
+
+# Deprioritize cellular profile (lte-modem)
+sudo nmcli connection modify lte-modem ipv4.route-metric 300 ipv6.route-metric 300 || true
+
+# Deprioritize cellular interface connection if found
+if [ -n "$CELL_CONN" ]; then
+  echo "Deprioritizing cellular interface connection '$CELL_CONN' (metric 300)..."
+  sudo nmcli connection modify "$CELL_CONN" ipv4.route-metric 300 ipv6.route-metric 300 || true
+fi
+
+# Deprioritize physical ethernet profiles (including fallback names)
+sudo nmcli connection modify netplan-eth0 ipv4.route-metric 300 ipv6.route-metric 300 || true
+for eth_conn in $(nmcli -g NAME,TYPE connection show | grep -E ":ethernet" | cut -d: -f1); do
+  if [ "$eth_conn" != "$CELL_CONN" ]; then
+    sudo nmcli connection modify "$eth_conn" ipv4.route-metric 300 ipv6.route-metric 300 || true
+  fi
+done
+
+# Prioritize WiFi profiles (metric 100)
 for conn in $(nmcli -g NAME,TYPE connection show | grep :vpn -v | grep -E ":802-11-wireless|:wireless|:wifi" | cut -d: -f1); do
   echo "Prioritizing WiFi connection: $conn"
   sudo nmcli connection modify "$conn" ipv4.route-metric 100 ipv6.route-metric 100 || true
@@ -363,7 +385,7 @@ sudo nmcli connection reload || true
 echo "Applying route metrics changes..."
 if [ -n "$IFACE" ]; then
   echo "  Reapplying settings to cellular interface '$IFACE'..."
-  sudo nmcli device reapply "$IFACE" 2>/dev/null || sudo nmcli connection up netplan-eth0 2>/dev/null || true
+  sudo nmcli device reapply "$IFACE" 2>/dev/null || { [ -n "$CELL_CONN" ] && sudo nmcli connection up "$CELL_CONN" 2>/dev/null; } || true
 fi
 for dev in $(nmcli -t -f DEVICE,TYPE device | grep ":wifi" | cut -d: -f1); do
   echo "  Reapplying settings to WiFi interface '$dev'..."
