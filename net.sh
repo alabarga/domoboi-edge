@@ -330,6 +330,9 @@ then
       if [ -n "$IFACE" ]; then
         echo "Cellular network interface '$IFACE' detected. Performing Google ping test..."
         ping -I "$IFACE" -c 4 google.com || true
+        
+        echo "Performing API integration test via echo.py..."
+        python3 "$SCRIPT_DIR/echo.py" || true
       else
         echo "Warning: Could not identify cellular network interface name for ping test."
       fi

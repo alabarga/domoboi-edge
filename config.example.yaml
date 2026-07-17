@@ -43,8 +43,8 @@ nilm:
 
 # Django Ingestion API Configuration
 api:
-  base_url: "http://localhost:8000"  # Target Django backend URL
-  token: "default-api-token-value-here"
+  base_url: "http://suara.domoboi.es"  # Target Django backend URL
+  token: "ab35abf09e99c44313c8bd2b47e71b32d0b30ca801480c"
   timeout_sec: 5
 
 # Local Offline Storage Buffer
