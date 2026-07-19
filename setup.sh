@@ -80,8 +80,17 @@ apt-get install -y \
   network-manager \
   git \
   build-essential \
-  cmake \
-  libgpiod-dev
+  libgpiod-dev \
+  htpdate
+
+echo "--> Syncing clock immediately over HTTP using htpdate..."
+htpdate -s -a google.com
+
+echo "--> Disabling conflicting systemd-timesyncd NTP service..."
+timedatectl set-ntp false || true
+systemctl stop systemd-timesyncd || true
+systemctl disable systemd-timesyncd || true
+
 
 # 2b. Ensure config.yaml exists
 CONFIG_PATH="$SCRIPT_DIR/config.yaml"

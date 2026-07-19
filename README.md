@@ -184,6 +184,7 @@ Control the edge client background task:
 sudo systemctl start domoboi-edge
 sudo systemctl stop domoboi-edge
 sudo systemctl restart domoboi-edge
+sudo journalctl -u domoboi-edge.service -f
 ```
 
 ### Network Interface Diagnostics
