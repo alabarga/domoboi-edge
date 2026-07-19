@@ -75,8 +75,11 @@ class NILMProcessor:
                     if len(self.baseline_history) == self.baseline_size and self.cooldown == 0:
                         mean_base, std_base = self._calculate_mean_and_std(self.baseline_history)
                         
+                        # Dynamic stability threshold to accommodate sensor noise scaling at high loads (allow up to 2%)
+                        dynamic_stability = max(self.stability_threshold, mean_base * 0.02)
+                        
                         # Only trigger from a stable baseline state
-                        if std_base <= self.stability_threshold:
+                        if std_base <= dynamic_stability:
                             # Dynamic threshold based on current base load (min 5W, scaling at 1.5%)
                             dynamic_threshold = max(self.min_threshold, mean_base * self.threshold_percentage)
                             
