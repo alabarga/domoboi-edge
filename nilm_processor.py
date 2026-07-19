@@ -19,8 +19,12 @@ class NILMProcessor:
         self.latest_events = latest_events if latest_events is not None else []
         
         nilm_cfg = config.get("nilm", {})
-        self.threshold = nilm_cfg.get("transient_threshold_watts", 40.0)
         self.device_id = config.get("device_id", "domoboi-01")
+        
+        # Adaptive threshold settings
+        self.min_threshold = nilm_cfg.get("min_threshold_watts", 5.0)
+        self.threshold_percentage = nilm_cfg.get("threshold_percentage", 0.015)
+        self.active_threshold = self.min_threshold
         
         # Sampling settings
         self.interval = nilm_cfg.get("sampling_interval_sec", 0.1)
@@ -73,15 +77,19 @@ class NILMProcessor:
                         
                         # Only trigger from a stable baseline state
                         if std_base <= self.stability_threshold:
+                            # Dynamic threshold based on current base load (min 5W, scaling at 1.5%)
+                            dynamic_threshold = max(self.min_threshold, mean_base * self.threshold_percentage)
+                            
                             delta_trigger = power - mean_base
-                            if abs(delta_trigger) >= self.threshold:
+                            if abs(delta_trigger) >= dynamic_threshold:
                                 # Trigger!
                                 self.state = "recording"
                                 self.pre_event_power = mean_base
+                                self.active_threshold = dynamic_threshold  # Capture threshold for confirmation
                                 self.start_time = timestamp
                                 self.transient_buffer = [power]
                                 self.samples_to_collect = self.window_size - 1
-                                log.info(f"Transition Triggered! Delta={delta_trigger:.1f}W, Baseline={mean_base:.1f}W")
+                                log.info(f"Transition Triggered! Delta={delta_trigger:.1f}W, Baseline={mean_base:.1f}W, Threshold={dynamic_threshold:.1f}W")
                                 
                     # If we did not trigger, add the new sample to the baseline history
                     if self.state == "idle":
@@ -101,8 +109,8 @@ class NILMProcessor:
                         
                         delta_p = mean_post - self.pre_event_power
                         
-                        # Verify the step size exceeds the threshold (filters out noise spikes)
-                        if abs(delta_p) >= self.threshold:
+                        # Verify the step size exceeds the dynamic threshold computed at trigger time
+                        if abs(delta_p) >= self.active_threshold:
                             post_avg, post_std = self._calculate_mean_and_std(self.transient_buffer)
                             post_min = min(self.transient_buffer)
                             post_max = max(self.transient_buffer)
