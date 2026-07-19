@@ -90,21 +90,24 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
     while not stop_event.is_set():
         start_time = time_now = time_ms()
         try:
-            v = chip.get_voltage("A")
-            i = chip.get_current("A")
+            # Determine active phase based on non-zero igain in config
+            cal = config.get("calibration", {})
+            active_phase = "A"
+            if cal.get("igain_b", 0) > 0:
+                active_phase = "B"
+            elif cal.get("igain_c", 0) > 0:
+                active_phase = "C"
+
+            v = chip.get_voltage("A")  # Voltage terminal is always Phase A reference
+            i = chip.get_current(active_phase)
             
-            # Fall back to voltage-estimated apparent power if AC-AC transformer is not connected
-            if v < 5.0:
-                nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)
-                p = i * nominal_v
-                q = 0.0
-                pf = 1.0
-                freq = float(config.get("mains", {}).get("line_frequency", 50.0))
-            else:
-                p = chip.get_active_power("A")
-                q = chip.get_reactive_power("A")
-                pf = chip.get_power_factor("A")
-                freq = chip.get_frequency()
+            # Since the clamp might be on B or C, estimate active power consistently
+            # using the Phase A voltage (since B & C voltage references are 0V).
+            voltage = v if v >= 5.0 else config.get("mains", {}).get("nominal_voltage", 230.0)
+            p = i * voltage
+            q = 0.0
+            pf = 1.0
+            freq = chip.get_frequency() if v >= 5.0 else float(config.get("mains", {}).get("line_frequency", 50.0))
                 
             temp = chip.get_temperature()
             

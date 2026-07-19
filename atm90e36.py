@@ -228,16 +228,14 @@ class ATM90E36:
         else:
             log.info("CSZero Configuration successfully loaded and verified.")
 
-        # 3. Configure Calibration / Adjust Registers
+        # 3. Configure Calibration / Adjust Registers (Write A, B, and C calibration unconditionally)
         self.write_reg(REG_CAL_START, 0x5678)
         self.write_reg(REG_UGAIN_A, self.ugain)
         self.write_reg(REG_IGAIN_A, self.igain_a)
-        
-        if self.config.get("mains", {}).get("phases", 1) > 1:
-            self.write_reg(REG_UGAIN_B, self.ugain)
-            self.write_reg(REG_IGAIN_B, self.igain_b)
-            self.write_reg(REG_UGAIN_C, self.ugain)
-            self.write_reg(REG_IGAIN_C, self.igain_c)
+        self.write_reg(REG_UGAIN_B, self.ugain)
+        self.write_reg(REG_IGAIN_B, self.igain_b)
+        self.write_reg(REG_UGAIN_C, self.ugain)
+        self.write_reg(REG_IGAIN_C, self.igain_c)
             
         # Checksum range 0x61-0x6E written to CSThree
         cs_three = self.check_sum(REG_UGAIN_A, 0x6E)
