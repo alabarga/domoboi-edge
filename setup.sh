@@ -146,7 +146,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
-ExecStart=$VENV_PATH/bin/python3 $SCRIPT_DIR/client.py
+ExecStart=$VENV_PATH/bin/python3 $SCRIPT_DIR/client.py --no-ui
 Restart=always
 RestartSec=10
 User=root

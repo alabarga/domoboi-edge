@@ -28,24 +28,28 @@ try:
 except ImportError:
     HAS_RICH = False
 
-USE_DASHBOARD = HAS_RICH and sys.stdout.isatty()
-
-# Setup logging
-log_file_handler = logging.FileHandler("data/client.log")
-log_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-
-log_stream_handler = logging.StreamHandler(sys.stdout)
-log_stream_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-
-if USE_DASHBOARD:
-    import os
-    os.makedirs("data", exist_ok=True)
-    root_logger.addHandler(log_file_handler)
-else:
-    root_logger.addHandler(log_stream_handler)
+# Setup dynamic logging based on UI mode
+def setup_logging(use_ui):
+    root_logger = logging.getLogger()
+    # Remove any existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        
+    root_logger.setLevel(logging.INFO)
+    log_format = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    
+    if use_ui:
+        # Save logs to a file so they don't corrupt the Rich interface
+        import os
+        os.makedirs("data", exist_ok=True)
+        file_handler = logging.FileHandler("data/client.log")
+        file_handler.setFormatter(log_format)
+        root_logger.addHandler(file_handler)
+    else:
+        # Standard service output directly to stdout/stderr so journald handles it
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(log_format)
+        root_logger.addHandler(stream_handler)
 
 log = logging.getLogger("client")
 
@@ -77,10 +81,8 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
         chip.initialize()
     except Exception as e:
         log.error(f"Failed to initialize ATM90E36 hardware: {e}", exc_info=True)
-        # We still continue the thread loop in case connection recovers or registers become readable
     
     # Startup guard: discard readings for the first few seconds after chip init
-    # The ATM90E36 produces a large SPI noise spike during its first register reads
     startup_guard_sec = nilm_cfg.get("startup_guard_sec", 3.0)
     startup_time = time_ms()
     log.info(f"Startup guard active: discarding readings for {startup_guard_sec}s to filter init noise...")
@@ -88,12 +90,10 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
     while not stop_event.is_set():
         start_time = time_now = time_ms()
         try:
-            # Poll phase A measurements
             v = chip.get_voltage("A")
             i = chip.get_current("A")
             
-            # If no AC-AC adapter is connected (voltage reads 0 or near 0),
-            # estimate the active power using nominal voltage from config
+            # Fall back to voltage-estimated apparent power if AC-AC transformer is not connected
             if v < 5.0:
                 nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)
                 p = i * nominal_v
@@ -164,7 +164,6 @@ async def run_rich_dashboard(config):
     from rich.bar import Bar
     from rich.text import Text
     from rich.console import Console
-    import os
     
     console = Console()
     
@@ -213,31 +212,25 @@ async def run_rich_dashboard(config):
                     border_style="cyan"
                 )
                 
-                # Latest Events Table
-                events_table = Table(title="Latest Detected NILM Events", title_style="bold yellow")
+                # Latest Events Table (Transition-Based)
+                events_table = Table(title="Latest Detected NILM Transitions", title_style="bold yellow")
                 events_table.add_column("Timestamp", style="dim")
-                events_table.add_column("Appliance Type", style="bold magenta")
-                events_table.add_column("Power Step", style="yellow")
-                events_table.add_column("Duration", style="cyan")
-                events_table.add_column("Description", style="white")
+                events_table.add_column("Direction", style="bold magenta")
+                events_table.add_column("Step Size (Watts)", style="yellow")
+                events_table.add_column("Window", style="cyan")
+                events_table.add_column("Details", style="white")
                 
-                # Show last 5 events
+                # Show last 5 transition events
                 for ev in latest_events[-5:]:
                     ev_p = ev.get("power", 0.0)
-                    # Scale: 1 block per 300W up to 3000W
-                    blocks = int(ev_p / 300.0)
+                    # Scale: 1 block per 100W up to 1000W
+                    blocks = int(ev_p / 100.0)
                     blocks = max(1, min(10, blocks)) if ev_p > 0.0 else 0
                     bar_str = "█" * blocks + "░" * (10 - blocks)
                     power_disp = f"[{bar_str}] {ev_p:.1f}W"
                     
-                    dur_sec = ev.get("duration_seconds")
-                    if dur_sec is not None:
-                        if dur_sec < 300:
-                            dur_disp = f"{dur_sec}s"
-                        else:
-                            dur_disp = f"{int(dur_sec / 60)}m"
-                    else:
-                        dur_disp = f"{ev.get('duration_minutes', 0)}m"
+                    dur_sec = ev.get("duration_seconds", 3)
+                    dur_disp = f"{dur_sec}s"
                     
                     events_table.add_row(
                         ev.get("start_time", "")[:19].replace("T", " "),
@@ -252,7 +245,7 @@ async def run_rich_dashboard(config):
                     table,
                     power_panel,
                     events_table,
-                    Text("Press Ctrl+C to terminate client safely. Logs are written to data/client.log", style="dim italic")
+                    Text("Press Ctrl+C to terminate client safely. Logs are managed by systemd.", style="dim italic")
                 )
                 
                 live.update(main_group)
@@ -264,7 +257,7 @@ async def run_rich_dashboard(config):
                 await asyncio.sleep(1.0)
 
 
-async def main_async(config, chip):
+async def main_async(config, chip, use_ui):
     # Queues
     raw_queue = asyncio.Queue()
     event_queue = asyncio.Queue()
@@ -289,7 +282,7 @@ async def main_async(config, chip):
     send_task = asyncio.create_task(sender.run())
     
     # Start dashboard if interactive rich mode is enabled
-    if USE_DASHBOARD:
+    if use_ui:
         asyncio.create_task(run_rich_dashboard(config))
     
     # Handle OS Shutdown Signals
@@ -385,6 +378,11 @@ def main():
         action="store_true",
         help="Run ATM90E36 diagnostic checks and exit"
     )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Disable the interactive Rich terminal interface"
+    )
     args = parser.parse_args()
 
     # Load config yaml
@@ -399,6 +397,13 @@ def main():
     import socket
     if not config.get("device_id"):
         config["device_id"] = socket.gethostname()
+
+    # Determine if UI dashboard should be shown
+    use_ui = HAS_RICH and sys.stdout.isatty() and not args.no_ui
+
+    # Setup Logging dynamically based on UI mode
+    setup_logging(use_ui)
+    
     log.info(f"Device ID: {config['device_id']}")
 
     # Initialize driver
@@ -415,7 +420,7 @@ def main():
 
     # Launch daemon
     try:
-        asyncio.run(main_async(config, chip))
+        asyncio.run(main_async(config, chip, use_ui))
     except Exception as e:
         log.error(f"Application terminated: {e}")
     finally:

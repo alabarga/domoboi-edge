@@ -248,3 +248,29 @@ sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os
 sudo python3 -c "import time, os; f=open('/dev/ttyUSB3', 'r+b', buffering=0); os.set_blocking(f.fileno(), False); f.read(1024); f.write(b'AT+CSQ\r\n'); [time.sleep(0.3) or print((f.read(1024) or b'').decode(errors='ignore'), end='') for _ in range(4)]"
 # Expected response: +CSQ: <rssi>,<ber> (e.g., +CSQ: 18,99; where rssi 0-31; 31 is best, 99 is unknown)
 ```
+
+### Service Logs Management (journalctl)
+
+When running the client as a background service via systemd, the interactive terminal UI is disabled (`--no-ui` flag) and all output is handled by the system journal. You can view, search, and manage these logs using `journalctl`:
+
+* **Tail live logs**:
+  ```bash
+  sudo journalctl -u domoboi-edge.service -f
+  ```
+* **View the last 100 log entries**:
+  ```bash
+  sudo journalctl -u domoboi-edge.service -n 100 --no-pager
+  ```
+* **Check log disk usage**:
+  ```bash
+  sudo journalctl --disk-usage
+  ```
+* **Clean logs (vacuuming) to free disk space**:
+  ```bash
+  # Keep only the last 7 days of logs:
+  sudo journalctl --vacuum-time=7d
+  
+  # Keep only up to 50MB of logs:
+  sudo journalctl --vacuum-size=50M
+  ```
+```

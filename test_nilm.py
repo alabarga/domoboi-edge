@@ -27,7 +27,8 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
             "device_id": "test-device",
             "nilm": {
                 "transient_threshold_watts": 40.0,
-                "match_window_seconds": 100
+                "stability_threshold_watts": 5.0,
+                "sampling_interval_sec": 0.1
             }
         }
         
@@ -44,47 +45,56 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
                 "active_power_a": 10.0
             })
             
-        # Allow processor to run
-        await asyncio.sleep(0.05)
-        self.assertEqual(len(processor.unmatched_on), 0)
+        # Allow processor to run and fill baseline history
+        await raw_queue.join()
         
-        # 2. Simulate ON Transient (Kettle turns ON: +2500W)
+        # 2. Simulate ON Transient (Kettle turns ON: +2500W). Collects 30 samples (3 seconds).
         kettle_on_time = now + timedelta(seconds=10)
-        for i in range(10):
+        for i in range(30):
             await raw_queue.put({
                 "timestamp": kettle_on_time + timedelta(milliseconds=i*100),
                 "active_power_a": 2510.0
             })
             
-        await asyncio.sleep(0.05)
-        # Should have captured 1 ON transient
-        self.assertEqual(len(processor.unmatched_on), 1)
-        self.assertEqual(processor.unmatched_on[0]["power"], 2500.0)
+        await raw_queue.join()
         
-        # 3. Simulate OFF Transient (Kettle turns OFF: -2500W)
-        kettle_off_time = kettle_on_time + timedelta(seconds=30)
-        for i in range(10):
+        # Event queue should have the ON event
+        self.assertFalse(event_queue.empty())
+        meas_on = await event_queue.get()
+        self.assertEqual(meas_on["device_id"], "test-device")
+        self.assertEqual(meas_on["value"], 2500.0)
+        self.assertTrue("features" in meas_on)
+        self.assertEqual(meas_on["features"]["min"], 2510.0)
+        self.assertEqual(meas_on["features"]["max"], 2510.0)
+        
+        # Feed 20 intermediate stable samples at 2510W to drain the 1.5s (15 samples) cooldown
+        for i in range(20):
+            await raw_queue.put({
+                "timestamp": kettle_on_time + timedelta(seconds=3) + timedelta(milliseconds=i*100),
+                "active_power_a": 2510.0
+            })
+        await raw_queue.join()
+        
+        # 3. Simulate OFF Transient (Kettle turns OFF: -2500W). Collects 30 samples (3 seconds).
+        kettle_off_time = kettle_on_time + timedelta(seconds=10)
+        for i in range(30):
             await raw_queue.put({
                 "timestamp": kettle_off_time + timedelta(milliseconds=i*100),
                 "active_power_a": 10.0
             })
             
-        await asyncio.sleep(0.05)
+        await raw_queue.join()
         
-        # ON transient should be matched and removed from list
-        self.assertEqual(len(processor.unmatched_on), 0)
-        
-        # Event queue should have the complete measurement segment payload
+        # Event queue should now have the OFF event
         self.assertFalse(event_queue.empty())
-        meas = await event_queue.get()
+        meas_off = await event_queue.get()
+        self.assertEqual(meas_off["device_id"], "test-device")
+        self.assertEqual(meas_off["value"], -2500.0)
         
-        self.assertEqual(meas["device_id"], "test-device")
-        self.assertTrue("readings" in meas)
-        self.assertTrue(len(meas["readings"]) > 0)
-        
-        # UI events list should have the local display event
-        self.assertEqual(len(latest_events), 1)
-        self.assertEqual(latest_events[0]["type"], "CYCLE")
+        # UI events list should have the two local display events (ON and OFF)
+        self.assertEqual(len(latest_events), 2)
+        self.assertEqual(latest_events[0]["type"], "ON")
+        self.assertEqual(latest_events[1]["type"], "OFF")
         
         # Cleanup
         await raw_queue.put(None)
