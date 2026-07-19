@@ -119,13 +119,13 @@ class ATM90E36:
         if self._i2c is not None:
             self._pca_state &= ~self.cs_mask
             self._pca_write(self._pca_state)
-            time.sleep(0.000005)  # 5us setup time
+            time.sleep(0.001)  # Increased to 1ms setup time for stable I2C expander toggling
 
     def _cs_deassert(self):
         if self._i2c is not None:
             self._pca_state |= self.cs_mask
             self._pca_write(self._pca_state)
-            time.sleep(0.000005)  # 5us hold time
+            time.sleep(0.001)  # Increased to 1ms hold time for stable I2C expander toggling
 
     def read_reg(self, reg):
         """Read 16-bit value from register, retrying if RMS registers return SPI noise (0xFFFF or 0xFFFE)."""
