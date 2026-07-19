@@ -98,16 +98,21 @@ def capture_thread_loop(config, chip, loop, raw_queue, stop_event):
             elif cal.get("igain_c", 0) > 0:
                 active_phase = "C"
 
-            v = chip.get_voltage("A")  # Voltage terminal is always Phase A reference
+            # Get mains parameters from configuration
+            mains_cfg = config.get("mains", {})
+            nominal_v = mains_cfg.get("nominal_voltage", 230.0)
+            line_freq = float(mains_cfg.get("line_frequency", 50.0))
+
+            v = chip.get_voltage("A")  # Voltage terminal remains Phase A for logging
             i = chip.get_current(active_phase)
             
-            # Since the clamp might be on B or C, estimate active power consistently
-            # using the Phase A voltage (since B & C voltage references are 0V).
-            voltage = v if v >= 5.0 else config.get("mains", {}).get("nominal_voltage", 230.0)
+            # Since there is no AC-AC reference connected, calculate estimated power
+            # using the configured nominal voltage directly.
+            voltage = nominal_v
             p = i * voltage
             q = 0.0
             pf = 1.0
-            freq = chip.get_frequency() if v >= 5.0 else float(config.get("mains", {}).get("line_frequency", 50.0))
+            freq = line_freq
                 
             temp = chip.get_temperature()
             
