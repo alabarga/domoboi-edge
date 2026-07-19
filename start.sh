@@ -14,3 +14,6 @@ sudo systemctl restart domoboi-edge
 
 echo "Checking service status..."
 sudo systemctl status domoboi-edge --no-pager -l
+
+echo "Checking service activity... ( Press Ctrl+C to stop this )"
+sudo journalctl -u domoboi-edge.service -f
