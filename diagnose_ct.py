@@ -71,9 +71,9 @@ def main():
             def signed16(v):
                 return v - 0x10000 if v & 0x8000 else v
             
-            pmean_a = signed16(pmean_a_raw) * multiplier
-            pmean_b = signed16(pmean_b_raw) * multiplier
-            pmean_c = signed16(pmean_c_raw) * multiplier
+            pmean_a = int(signed16(pmean_a_raw) * multiplier)
+            pmean_b = int(signed16(pmean_b_raw) * multiplier)
+            pmean_c = int(signed16(pmean_c_raw) * multiplier)
             
             # Estimated power (current * nominal voltage)
             nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)
