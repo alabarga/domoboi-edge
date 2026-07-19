@@ -33,14 +33,15 @@ calibration:
   igain_a: 65535          # Max 16-bit register value (registers cannot hold 144000)
   igain_b: 0              # Current gain for Channel B (CT2) - set to 0 if unused
   igain_c: 0              # Current gain for Channel C (CT3) - set to 0 if unused
-  current_multiplier: 2.03 # Software multiplier to achieve 133000 equivalent gain (65535 * 2.03)
+  current_multiplier: 0.32 # Software multiplier to achieve calibrated gain
 
 # NILM Logic Parameters
 nilm:
-  sampling_interval_sec: 0.1      # Poll ATM90E36 every 100ms (10 Hz sampling)
-  transient_threshold_watts: 5.0  # Minimum step-change in Watts to trigger an event (5W)
+  sampling_interval_sec: 0.2      # Poll ATM90E36 every 200ms (5 Hz sampling)
+  transient_threshold_watts: 45.0  # Minimum step-change in Watts to trigger an event
   threshold_percentage: 0.015     # Grid voltage fluctuation margin (1.5% of baseline load)
-  stability_threshold_watts: 5.0  # Max standard deviation (Watts) to declare a window stable
+  stability_threshold_watts: 15.0  # Max standard deviation (Watts) to declare a window stable
+  stability_percentage: 0.05      # Max standard deviation as percentage of baseline load (5%)
   match_window_seconds: 3600      # Max time (1 hour) to match ON and OFF transients
 
 # Django Ingestion API Configuration
