@@ -26,7 +26,7 @@ class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
         config = {
             "device_id": "test-device",
             "nilm": {
-                "min_threshold_watts": 40.0,
+                "transient_threshold_watts": 40.0,
                 "stability_threshold_watts": 5.0,
                 "sampling_interval_sec": 0.1
             }

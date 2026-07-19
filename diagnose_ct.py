@@ -56,23 +56,24 @@ def main():
             pmean_b_raw = chip.read_reg(0xB2)
             pmean_c_raw = chip.read_reg(0xB3)
             
-            # Convert current RMS: register * 0.001 = Amperes
-            irms_a = irms_a_raw * 0.001
-            irms_b = irms_b_raw * 0.001
-            irms_c = irms_c_raw * 0.001
+            # Convert current RMS: register * 0.001 = Amperes (applying current_multiplier calibration)
+            multiplier = config.get("calibration", {}).get("current_multiplier", 1.0)
+            irms_a = irms_a_raw * 0.001 * multiplier
+            irms_b = irms_b_raw * 0.001 * multiplier
+            irms_c = irms_c_raw * 0.001 * multiplier
             
             # Convert voltage RMS: register * 0.01 = Volts
             urms_a = urms_a_raw * 0.01
             urms_b = urms_b_raw * 0.01
             urms_c = urms_c_raw * 0.01
             
-            # Convert active power (signed two's complement)
+            # Convert active power (signed two's complement, calibrated)
             def signed16(v):
                 return v - 0x10000 if v & 0x8000 else v
             
-            pmean_a = signed16(pmean_a_raw)
-            pmean_b = signed16(pmean_b_raw)
-            pmean_c = signed16(pmean_c_raw)
+            pmean_a = signed16(pmean_a_raw) * multiplier
+            pmean_b = signed16(pmean_b_raw) * multiplier
+            pmean_c = signed16(pmean_c_raw) * multiplier
             
             # Estimated power (current * nominal voltage)
             nominal_v = config.get("mains", {}).get("nominal_voltage", 230.0)

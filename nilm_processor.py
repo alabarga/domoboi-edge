@@ -22,7 +22,7 @@ class NILMProcessor:
         self.device_id = config.get("device_id", "domoboi-01")
         
         # Adaptive threshold settings
-        self.min_threshold = nilm_cfg.get("min_threshold_watts", 5.0)
+        self.min_threshold = nilm_cfg.get("transient_threshold_watts", 10.0)
         self.threshold_percentage = nilm_cfg.get("threshold_percentage", 0.015)
         self.active_threshold = self.min_threshold
         
