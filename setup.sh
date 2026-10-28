@@ -80,11 +80,12 @@ apt-get install -y \
   network-manager \
   git \
   build-essential \
+  cmake \
   libgpiod-dev \
   htpdate
 
 echo "--> Syncing clock immediately over HTTP using htpdate..."
-htpdate -s -a google.com
+htpdate -s -a google.com || echo "Warning: clock sync failed (no internet yet?). Continuing."
 
 echo "--> Disabling conflicting systemd-timesyncd NTP service..."
 timedatectl set-ntp false || true
@@ -110,9 +111,12 @@ if [ -d "$SCRIPT_DIR/testctread" ]; then
   cd "$SCRIPT_DIR/testctread"
   mkdir -p build
   cd build
-  cmake ..
-  make
-  echo "testctread successfully compiled inside testctread/build/"
+  # Diagnostic tool only: a build failure must not abort the service install below
+  if cmake .. && make; then
+    echo "testctread successfully compiled inside testctread/build/"
+  else
+    echo "Warning: testctread build failed. Continuing."
+  fi
   cd "$SCRIPT_DIR"
 else
   echo "Warning: testctread directory not found."
