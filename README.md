@@ -6,12 +6,13 @@ An edge-based Non-Intrusive Load Monitoring (NILM) software stack for the Raspbe
 
 ## 1. System Architecture
 
-The client operates on a decoupled data capture and analysis pipeline:
-* **Capture (SPI Thread)**: Polls the ATM90E36 hardware registers at 10Hz, reading voltage and current.
-* **Bilateral Step Detection**: Instead of simple delta thresholding, the processor splits a 1.0-second sliding buffer (10 samples) into pre-event (0.5s) and post-event (0.5s) windows. A load step change (transient) is declared **only if both windows are stable** (standard deviation below `stability_threshold_watts`), filtering out high-frequency startup spikes or register noise.
-* **Event Segmenting**: When a positive step (ON transient) is detected, the client starts buffering the raw 10Hz readings in memory. Once a matching negative step (OFF transient) is paired, the segment is closed.
-* **Server-Side NILM Processing**: The client does **not** classify appliances locally. It transmits the complete raw segment readings array as a JSON payload to the Django server (`/nilm/api/measurements/`), which executes the heavy classification and stores the resulting event.
-* **Store-and-Forward Buffering**: If the LTE connection drops, payloads are automatically stored in a local SQLite database (`offline_measurements`) and synced once the connection is restored.
+The client operates on a decoupled data capture and analysis pipeline (`client.py` → `nilm_processor.py` → `sender.py`):
+* **Capture (SPI Thread)**: A dedicated thread polls the ATM90E36 every `sampling_interval_sec` (default 0.1s = 10Hz). Readings from the first `startup_guard_sec` (default 3s) after chip init are discarded to filter init noise.
+* **Estimated Power**: No AC voltage reference is currently used, so active power is computed as `Irms × nominal_voltage` (PF = 1, Q = 0). The CT channel is selected from the calibration gains: CT2 (phase B) if `igain_b > 0`, else CT3 (phase C) if `igain_c > 0`, else CT1 (phase A).
+* **Adaptive Transition Detection**: The processor keeps a 10-sample (1s) baseline. When the baseline is stable (std ≤ `max(stability_threshold_watts, baseline × stability_percentage)`) and a new sample deviates by ≥ `max(transient_threshold_watts, baseline × threshold_percentage)`, it records a 3-second window. The transition is confirmed if the mean of the last 10 samples still differs from the pre-event baseline by at least the threshold; then a 1.5s cooldown applies.
+* **Independent ON/OFF Events**: Each confirmed transition (ON = positive step, OFF = negative step) is sent on its own. ON/OFF pairing is **not** done on the device.
+* **Server-Side NILM Processing**: The client does **not** classify appliances locally. Each transition is POSTed to the Django server (`/nilm/api/measurements/`) as JSON: `device_id`, `start_time`, `end_time`, `readings` (raw window), `value` (signed ΔP in W) and `features` (`avg`, `min`, `max`, `std`).
+* **Store-and-Forward Buffering**: If the connection drops, payloads are stored in a local SQLite database (`buffer.db_path`, table `offline_measurements`) and resynced every `sync_interval_sec`.
 
 ---
 
@@ -20,8 +21,8 @@ The client operates on a decoupled data capture and analysis pipeline:
 * **SPI Interface**: Standard SPI0 (MOSI on GPIO 10, MISO on GPIO 9, SCLK on GPIO 11).
 * **I2C Interface**: Standard I2C1 (SDA on GPIO 2, SCL on GPIO 3).
 * **Chip Select (/CS)**: Driven via the onboard **PCA9671 I2C GPIO Expander** mapped to address **`0x21`** (A0 pulled high). Direct raw 2-byte I2C block writes are used to drive the expander without offset sub-registers. Chip Select is mapped to expander output pin **9**.
-* **AC Reference**: Connect an 8V-12V AC RMS voltage reference transformer to V1P/V1N. If absent, the driver falls back to software estimation using nominal voltage (e.g., 230V).
-* **Current Clamps**: Connect SCT-013-000 CT clamps to CT1 (Phase A / `IrmsA`). The clamp **must surround the brown (Live) wire only**, never the entire cable, to avoid magnetic field cancellation.
+* **AC Reference**: Connect an 8V-12V AC RMS voltage reference transformer to V1P/V1N. Note: the monitoring service currently always estimates power from the configured nominal voltage (e.g., 230V), even when a reference is connected. Only `--smoke-test` uses the measured voltage and power registers (when V ≥ 5V).
+* **Current Clamps**: Connect SCT-013-000 CT clamps to CT1 (Phase A / `IrmsA`), or to CT2/CT3 with the matching `igain_b`/`igain_c` set to a non-zero value. The clamp **must surround the brown (Live) wire only**, never the entire cable, to avoid magnetic field cancellation.
 * **LTE Antenna Connector**: Ensure the internal U.FL pigtail coaxial connector on the Quectel mini-PCIe module is snapped into the **MAIN** (LTE MAIN) port, not the DIV/AUX port. Connecting it to AUX/DIV will prevent the modem from registering on the cellular network.
 
 ---
@@ -114,25 +115,35 @@ The modem is configured in **Ethernet Control Model (ECM)** mode. It exposes a v
 
 ## 5. Configuration (`config.yaml`)
 
-Configure gains, thresholds, and endpoints in `config.yaml`:
-```yaml
-mains:
-  nominal_voltage: 230
-  line_frequency: 50
+`config.yaml` is git-ignored; create it from `config.example.yaml`, which documents every option. Main sections:
 
+* `device_id`: optional, defaults to the hostname.
+* `mains`: `nominal_voltage` (used for power estimation) and `line_frequency`.
+* `spi` / `i2c`: bus settings and the PCA9671 expander address and CS pin.
+* `calibration`: `ugain`, `igain_a/b/c` (16-bit registers, max 65535; a non-zero `igain_b`/`igain_c` selects that CT channel), and `current_multiplier` (software gain on top of the register gain).
+* `nilm`: `sampling_interval_sec`, `transient_threshold_watts`, `threshold_percentage`, `stability_threshold_watts`, `stability_percentage`, optional `startup_guard_sec`.
+* `api`: `base_url`, `token`, `timeout_sec`.
+* `buffer`: `db_path`, `sync_interval_sec`.
+* `modem`: APN credentials, read by `net.sh`.
+
+```yaml
 calibration:
-  ugain: 20200            # Voltage gain
-  igain_a: 65535          # Max 16-bit register value (ATM90E36 register limit)
-  current_multiplier: 2.1973 # Software multiplier to achieve 144000 equivalent gain (65535 * 2.1973)
+  ugain: 20200
+  igain_a: 65535            # ATM90E36 register limit
+  igain_b: 0
+  igain_c: 0
+  current_multiplier: 2.0
 
 nilm:
   sampling_interval_sec: 0.1
-  transient_threshold_watts: 10.0 # Umbral de escalón de potencia para detectar transitorios
-  stability_threshold_watts: 3.0  # Desviación estándar máxima para considerar estable un estado
+  transient_threshold_watts: 40.0
+  threshold_percentage: 0.015
+  stability_threshold_watts: 8.0
+  stability_percentage: 0.05
 
 api:
-  base_url: "http://192.168.1.133:8000"
-  token: "40ab35abf09e99c44313c8bd2b47e71b32d0b30ca801480c"
+  base_url: "http://suara.domoboi.es"
+  token: "<your-api-token>"
 ```
 
 ---
@@ -140,6 +151,22 @@ api:
 ## 6. Diagnostic & Testing Tools
 
 We provide diagnostic utilities to verify hardware communication:
+
+* **Smoke Test (`client.py --smoke-test`)**:
+  Initializes the chip, prints 10 readings at 1Hz and exits.
+  ```bash
+  .venv/bin/python3 client.py --smoke-test
+  ```
+* **Backend Registration Check (`echo.py`)**:
+  Checks with the server that this `device_id` is registered (`GET /nilm/api/device/`) and prints its model and location.
+  ```bash
+  python3 echo.py
+  ```
+* **Unit Tests (`test_nilm.py`)**:
+  Exercises transition detection and offline buffering/sync against a mock server. No hardware needed.
+  ```bash
+  python3 test_nilm.py
+  ```
 
 * **Low-Level SPI/I2C Scan (`diagnose_spi.py`)**:
   Performs an I2C scan for the expander, tests the CS toggling mechanism, tries all SPI modes/speeds, and brute-forces expander pins to verify registration connectivity.

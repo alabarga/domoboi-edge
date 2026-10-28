@@ -98,108 +98,93 @@ sys.exit(1)
       APN_NAME="internet"
     fi
     
-    while true; do
-      echo "Checking SIM card status..."
-      SIM_STATUS=$(python3 -c "
+    # Send one AT command, print the whitespace-collapsed, upper-cased response
+    at_query() {
+      python3 - "$MODEM_PORT" "$1" <<'PY'
 import time, sys, os
-port = sys.argv[1]
 try:
-    with open(port, 'r+b', buffering=0) as f:
+    with open(sys.argv[1], 'r+b', buffering=0) as f:
         os.set_blocking(f.fileno(), False)
         f.read(1024)
-        f.write(b'AT+CPIN?\r\n')
-        resp = ''
-        for _ in range(4):
+        f.write(sys.argv[2].encode() + b'\r\n')
+        resp = b''
+        for _ in range(6):
             time.sleep(0.3)
-            chunk = f.read(1024)
-            if chunk:
-                resp += chunk.decode(errors='ignore')
-        
-        if 'READY' in resp:
-            print('READY')
-            sys.exit(0)
-        elif 'SIM PIN' in resp:
-            print('LOCKED')
-            sys.exit(1)
-        elif 'NOT INSERTED' in resp or 'ERROR' in resp:
-            print('NOT_INSERTED')
-            sys.exit(2)
-        else:
-            print('UNKNOWN')
-            sys.exit(3)
-except Exception:
-    print('PORT_ERROR')
-    sys.exit(4)
-" "$MODEM_PORT" || true)
+            resp += f.read(1024) or b''
+    print(' '.join(resp.decode(errors='ignore').split()).upper())
+except Exception as e:
+    print('PORT_ERROR', e)
+PY
+    }
 
-      echo "Detected SIM Status: $SIM_STATUS"
-      
-      if [ "$SIM_STATUS" = "READY" ]; then
-        echo "SIM is already unlocked/READY. Skipping PIN disable step."
-        break
-      else
-        # If status is NOT READY (LOCKED, UNKNOWN, PORT_ERROR, etc.)
-        # We ask for the PIN if not already defined in config and running interactively
+    # Classify an AT+CPIN? response. "+CME ERROR: 14" / "NOT READY" = SIM still initializing.
+    sim_status() {
+      case "$1" in
+        *"+CPIN: READY"*) echo READY ;;
+        *"SIM PUK"*) echo PUK_LOCKED ;;
+        *"SIM PIN"*) echo LOCKED ;;
+        *"NOT INSERTED"*|*"CME ERROR: 10"*) echo NOT_INSERTED ;;
+        *"CME ERROR: 14"*|*"SIM BUSY"*|*"NOT READY"*|"") echo BUSY ;;
+        PORT_ERROR*) echo PORT_ERROR ;;
+        *) echo UNKNOWN ;;
+      esac
+    }
+
+    PIN_SENT=""
+    while true; do
+      # The SIM needs a few seconds after modem power-up; poll before judging
+      for attempt in {1..10}; do
+        SIM_RESP=$(at_query 'AT+CPIN?')
+        SIM_STATUS=$(sim_status "$SIM_RESP")
+        echo "SIM status: $SIM_STATUS ($SIM_RESP)"
+        case "$SIM_STATUS" in READY|LOCKED|PUK_LOCKED) break ;; esac
+        sleep 2
+      done
+
+      # Only send the PIN when the SIM actually asks for it, and only once per run:
+      # every wrong PIN burns one of the 3 attempts before the SIM is PUK-locked.
+      if [ "$SIM_STATUS" = "LOCKED" ] && [ -z "$PIN_SENT" ]; then
         if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
-          read -p "SIM is not READY (Status: $SIM_STATUS). Enter your SIM card PIN (or press Enter to skip): " -r SIM_PIN
+          read -p "SIM requires a PIN. Enter it (or press Enter to skip): " -r SIM_PIN
         fi
-        
         if [ -n "$SIM_PIN" ]; then
-          echo "Disabling SIM PIN lock using PIN..."
-          python3 -c "import time; f=open('$MODEM_PORT', 'r+b', buffering=0); f.write(b'AT+CLCK=\"SC\",0,\"$SIM_PIN\"\r\n'); time.sleep(0.5); f.read(1024)" || true
-          sleep 1
-          
-          # Verify unlock status
-          echo "Verifying unlock status..."
-          SIM_STATUS=$(python3 -c "
-import time, sys, os
-port = sys.argv[1]
-try:
-    with open(port, 'r+b', buffering=0) as f:
-        os.set_blocking(f.fileno(), False)
-        f.read(1024)
-        f.write(b'AT+CPIN?\r\n')
-        resp = ''
-        for _ in range(4):
-            time.sleep(0.3)
-            chunk = f.read(1024)
-            if chunk:
-                resp += chunk.decode(errors='ignore')
-        if 'READY' in resp:
-            print('READY')
-            sys.exit(0)
-        else:
-            print('LOCKED')
-            sys.exit(1)
-except Exception:
-    print('PORT_ERROR')
-    sys.exit(2)
-" "$MODEM_PORT" || true)
-          
+          PIN_SENT=1
+          echo "Unlocking SIM: $(at_query "AT+CPIN=\"$SIM_PIN\"")"
+          sleep 3
+          SIM_STATUS=$(sim_status "$(at_query 'AT+CPIN?')")
           if [ "$SIM_STATUS" = "READY" ]; then
-            echo "SIM successfully unlocked!"
-            break
+            # PIN is known-good now; disable the lock so modem reboots don't need it
+            echo "Disabling SIM PIN lock: $(at_query "AT+CLCK=\"SC\",0,\"$SIM_PIN\"")"
           fi
         fi
-        
-        # If still not ready, show warning and retry/skip menu
-        if [ -t 0 ]; then
-          echo "------------------------------------------------------------------"
-          echo "WARNING: SIM card is not ready (Status: $SIM_STATUS)."
-          echo "Please ensure:"
-          echo " 1. The SIM card is physically inserted in the correct orientation."
-          echo " 2. The coaxial pigtail is snapped into the 'MAIN' LTE port."
-          echo " 3. The modem is powered on and has completed booting."
-          echo "------------------------------------------------------------------"
-          read -p "Press [Enter] to retry SIM detection, or type 's' to skip: " -r USER_CHOICE
-          if [ "$USER_CHOICE" = "s" ] || [ "$USER_CHOICE" = "S" ]; then
-            echo "Skipping SIM configuration as requested."
-            break
-          fi
-        else
-          echo "Non-interactive shell: Skipping SIM step since status is $SIM_STATUS."
+      fi
+
+      if [ "$SIM_STATUS" = "READY" ]; then
+        echo "SIM is READY."
+        break
+      fi
+
+      if [ -t 0 ]; then
+        echo "------------------------------------------------------------------"
+        echo "WARNING: SIM card is not ready (Status: $SIM_STATUS)."
+        case "$SIM_STATUS" in
+          PUK_LOCKED) echo " The SIM is PUK-locked. Unlock it in a phone before continuing." ;;
+          LOCKED) echo " The PIN was rejected. Fix 'pin' in config.yaml; retrying will not resend it." ;;
+          *)
+            echo " 1. The SIM card is physically inserted in the correct orientation."
+            echo " 2. The modem is not in airplane mode: $(at_query 'AT+CFUN?') (expect +CFUN: 1)"
+            echo " 3. SIM hot-plug detection: $(at_query 'AT+QSIMDET?') (if 1,x and the adapter has no detect pin, try AT+QSIMDET=0,0)"
+            ;;
+        esac
+        echo "------------------------------------------------------------------"
+        read -p "Press [Enter] to retry SIM detection, or type 's' to skip: " -r USER_CHOICE
+        if [ "$USER_CHOICE" = "s" ] || [ "$USER_CHOICE" = "S" ]; then
+          echo "Skipping SIM configuration as requested."
           break
         fi
+      else
+        echo "Non-interactive shell: Skipping SIM step since status is $SIM_STATUS."
+        break
       fi
     done
     
@@ -270,7 +255,7 @@ while time.time() - start_time < 150:
     attempt += 1
     cpin_resp = send_cmd(b'AT+CPIN?')
     cpin_state = 'UNKNOWN'
-    if 'READY' in cpin_resp:
+    if '+CPIN: READY' in cpin_resp:
         cpin_state = 'READY'
     elif 'SIM PIN' in cpin_resp:
         cpin_state = 'PIN_LOCKED'
