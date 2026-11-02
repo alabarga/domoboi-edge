@@ -29,13 +29,13 @@ except ImportError:
     HAS_RICH = False
 
 # Setup dynamic logging based on UI mode
-def setup_logging(use_ui):
+def setup_logging(use_ui, level="INFO"):
     root_logger = logging.getLogger()
     # Remove any existing handlers
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
         
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(str(level).upper())
     log_format = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     
     if use_ui:
@@ -410,7 +410,7 @@ def main():
     use_ui = HAS_RICH and sys.stdout.isatty() and not args.no_ui
 
     # Setup Logging dynamically based on UI mode
-    setup_logging(use_ui)
+    setup_logging(use_ui, config.get("log_level", "INFO"))
     
     log.info(f"Device ID: {config['device_id']}")
 

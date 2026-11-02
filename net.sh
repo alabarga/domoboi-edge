@@ -161,6 +161,19 @@ PY
 
       if [ "$SIM_STATUS" = "READY" ]; then
         echo "SIM is READY."
+        # READY may only mean it was unlocked earlier this power cycle. If the lock is still
+        # enabled (+CLCK: 1) the modem reboot below will bring the PIN prompt back.
+        LOCK_RESP=$(at_query 'AT+CLCK="SC",2')
+        echo "SIM PIN lock status: $LOCK_RESP"
+        if [[ "$LOCK_RESP" == *"+CLCK: 1"* ]]; then
+          if [ -z "$SIM_PIN" ] && [ -t 0 ]; then
+            read -p "SIM PIN lock is enabled. Enter the PIN to disable it (or press Enter to skip): " -r SIM_PIN
+          fi
+          if [ -n "$SIM_PIN" ]; then
+            echo "Disabling SIM PIN lock: $(at_query "AT+CLCK=\"SC\",0,\"$SIM_PIN\"")"
+            echo "SIM PIN lock status: $(at_query 'AT+CLCK="SC",2')"
+          fi
+        fi
         break
       fi
 

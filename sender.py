@@ -143,8 +143,10 @@ class LTESender:
                 
                 async with aiohttp.ClientSession() as session:
                     success_count = 0
-                    for row_id, payload_str in rows:
+                    for i, (row_id, payload_str) in enumerate(rows, 1):
                         meas = json.loads(payload_str)
+                        log.debug(f"Sync attempt {i}/{len(rows)}: buffered segment id={row_id} "
+                                 f"({len(meas.get('readings', []))} samples, {len(payload_str)} bytes)")
                         # Attempt transmission
                         resp_data = await self.send_payload(session, url, meas)
                         
