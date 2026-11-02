@@ -168,6 +168,13 @@ User=root
 WantedBy=multi-user.target
 EOF
 
+# 7. Hardware watchdog (resets the Pi if it hangs, e.g. after a brownout) and persistent journal
+echo "--> Enabling hardware watchdog and persistent journal..."
+mkdir -p /etc/systemd/system.conf.d /etc/systemd/journald.conf.d
+printf '[Manager]\nRuntimeWatchdogSec=15\n' > /etc/systemd/system.conf.d/watchdog.conf
+printf '[Journal]\nStorage=persistent\nSystemMaxUse=100M\n' > /etc/systemd/journald.conf.d/persistent.conf
+systemctl restart systemd-journald
+
 # Reload and enable service (but do not start yet since script files are not fully implemented)
 systemctl daemon-reload
 systemctl enable domoboi-edge.service
