@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 REG_SOFT_RESET    = 0x00
 REG_SYS_STATUS0   = 0x01
 REG_SYS_STATUS1   = 0x02
+REG_LAST_SPI_DATA = 0x0F
 
 REG_CONFIG_START  = 0x30
 REG_PL_CONST_H    = 0x31
@@ -127,32 +128,26 @@ class ATM90E36:
             self._pca_write(self._pca_state)
             time.sleep(0.001)  # Increased to 1ms hold time for stable I2C expander toggling
 
+    def _xfer_read(self, reg):
+        with self._lock:
+            self._cs_assert()
+            try:
+                # Read command: bit15 = 1. Address is 16-bit.
+                resp = self._spi.xfer2([0x80 | (reg >> 8), reg & 0xFF, 0x00, 0x00])
+                return (resp[2] << 8) | resp[3]
+            finally:
+                self._cs_deassert()
+
     def read_reg(self, reg):
-        """Read 16-bit value from register, retrying if RMS registers return SPI noise (0xFFFF or 0xFFFE)."""
-        # RMS registers for voltage (0xD9-0xDB) and current (0xDD-0xDF) — all unsigned
-        rms_registers = [0xD1, 0xD2, 0xD3, 0xD9, 0xDA, 0xDB, 0xDD, 0xDE, 0xDF]
-        import time
-        
+        """Read 16-bit value from register, verified against LastSPIData (0x0F) to reject corrupted SPI reads."""
         for attempt in range(3):
-            with self._lock:
-                self._cs_assert()
-                try:
-                    # Read command: bit15 = 1. Address is 16-bit.
-                    cmd = [0x80 | (reg >> 8), reg & 0xFF, 0x00, 0x00]
-                    resp = self._spi.xfer2(cmd)
-                    val = (resp[2] << 8) | resp[3]
-                finally:
-                    self._cs_deassert()
-            
-            # If it's a critical RMS register and returned SPI read noise (0xFFFF/0xFFFE), retry
-            if reg in rms_registers and val in (0xFFFF, 0xFFFE):
-                log.warning(f"SPI read noise (val={hex(val)}) detected on register {hex(reg)}. Retrying (attempt {attempt+1}/3)...")
-                time.sleep(0.005)  # 5ms delay
-                continue
-            
-            return val
-            
-        return 0  # Fallback to 0 if consistently returning SPI noise
+            val = self._xfer_read(reg)
+            # LastSPIData mirrors the previous transfer's data; mismatch means either read was garbled
+            if reg == REG_LAST_SPI_DATA or self._xfer_read(REG_LAST_SPI_DATA) == val:
+                return val
+            log.warning(f"SPI read mismatch on register {hex(reg)} (val={hex(val)}). Retrying (attempt {attempt+1}/3)...")
+            time.sleep(0.005)
+        return 0  # Fallback to 0 if reads never verify
 
     def write_reg(self, reg, val):
         """Write 16-bit value to register."""

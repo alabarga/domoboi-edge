@@ -14,6 +14,10 @@ from aiohttp import web
 # Import our edge modules
 from nilm_processor import NILMProcessor
 from sender import LTESender
+from unittest import mock
+import sys
+sys.modules.setdefault("spidev", mock.MagicMock())
+from atm90e36 import ATM90E36, REG_LAST_SPI_DATA
 
 
 class TestNILMPipeline(unittest.IsolatedAsyncioTestCase):
@@ -206,6 +210,17 @@ class TestLTESender(unittest.IsolatedAsyncioTestCase):
         await self.event_queue.put(None)
         await sender_task
         await runner.cleanup()
+
+
+class TestATM90E36ReadVerify(unittest.TestCase):
+    def test_garbled_read_is_retried(self):
+        chip = ATM90E36.__new__(ATM90E36)
+        chip._lock = mock.MagicMock()
+        chip._cs_assert = chip._cs_deassert = lambda: None
+        # First read glitches (0x876E) but LastSPIData says 0x006D -> retry; second pair agrees
+        values = iter([0x876E, 0x006D, 0x006E, 0x006E])
+        chip._spi = mock.Mock(xfer2=lambda cmd: [0, 0, *divmod(next(values), 256)])
+        self.assertEqual(chip.read_reg(0xDD), 0x006E)
 
 
 if __name__ == "__main__":
